@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prek:
+    name: Pre-commit (prek)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uvx prek run --all-files --show-diff-on-failure
+
+  test:
+    name: Test (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv pip install -e airdress
+      - run: uv run ruff check src tests airdress
+      - run: uv run ruff format --check src tests airdress
+      - run: uv run mypy
+      - run: uv run pytest -q tests airdress/tests
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv build --out-dir dist/airdress-home
+      - run: uv build airdress --out-dir dist/airdress
+      # `pip install airdress` must install airdress-home, and
+      # `import airdress.home` must be that package.
+      - name: Install the meta-package from the built wheels
+        run: |
+          uv venv /tmp/meta
+          uv pip install --python /tmp/meta/bin/python \
+            --find-links dist/airdress-home --find-links dist/airdress airdress
+          /tmp/meta/bin/python -c "
+          import airdress.home, airdress_home
+          assert airdress.home is airdress_home
+          assert airdress.home.MachineKey is airdress_home.MachineKey
+          print('airdress', airdress.__version__, '->', 'airdress-home', airdress_home.__version__)
+          "
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/

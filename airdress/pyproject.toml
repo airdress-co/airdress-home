@@ -1,0 +1,26 @@
+[project]
+name = "airdress"
+version = "0.0.0"
+description = "The Airdress Python packages. You probably want airdress-home."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+authors = [{ name = "Airdress", email = "support@airdress.co" }]
+dependencies = ["airdress-home>=0.1"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://airdress.co"
+Source = "https://github.com/airdress-co/airdress-home"
+"airdress-home" = "https://pypi.org/project/airdress-home/"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airdress"]

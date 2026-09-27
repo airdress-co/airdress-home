@@ -1,0 +1,60 @@
+{
+  "comment": "Shared by airdress-home and the operator; each side recomputes every value.",
+  "machine": {
+    "seed": "ERERERERERERERERERERERERERERERERERERERERERE",
+    "public_key": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+    "fingerprint": "SHA256:ELpoLIrRNROXHotWiBqri9cCu4B3luyoGTLHNalNbm0",
+    "kid": "k-10ba682c8ad13513",
+    "device_code": "dc-vector-0001",
+    "proof": "iH-aRO14H4dwJpscnH-J0LDj9iTwTTHsZlZqpcRyq6YcNfCAxZgOdP8TE2JYXqqDuR4_Y6000Ur8CkxU6xRWCA",
+    "machine_id": "00000000-0000-4000-8000-000000000001",
+    "keyid": "machine:00000000-0000-4000-8000-000000000001#k-10ba682c8ad13513"
+  },
+  "operator": {
+    "seed": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "public_key": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA",
+    "kid": "k-1325b850c2871916",
+    "origin": "https://op.example",
+    "user_code": "WDJB-MJHT",
+    "answer_proof": "TVdEjhMu69_wPRX9SIgUGj9QlAXXcf5H5W1iHjGGk1q-GMlum2E5m9ZVN6-vl67CBrVOAIKM7LRFVpLSUnl8AA",
+    "confirmation_code": "3QPL-QBF7-KILS-3MDW-NKYL"
+  },
+  "httpsig": [
+    {
+      "method": "POST",
+      "target_uri": "https://op.example/v1/home/poll",
+      "content_type": "application/json",
+      "body": "{\"session\":null,\"ack\":null}",
+      "created": 1800000000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "lifetime": 60,
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Digest": "sha-256=:xURtIb/g8qOd541tKDptBgCR1eXbtRWOEsYcXQ+X8G0=:",
+        "Signature-Input": "sig1=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\");created=1800000000;expires=1800000060;nonce=\"AAAAAAAAAAAAAAAAAAAAAA\";alg=\"ed25519\";keyid=\"machine:00000000-0000-4000-8000-000000000001#k-10ba682c8ad13513\";tag=\"airdress-machine\"",
+        "Signature": "sig1=:npw1OEXzWeEA4Z1n0iozcOmY0ed+NQWTeALOgWZfOUZigv63PyvkZBc2dJF/wUJLDPYSc03HLdZQsDpAMG1rCQ==:"
+      }
+    },
+    {
+      "method": "GET",
+      "target_uri": "https://op.example/v1/home/session",
+      "content_type": null,
+      "body": "",
+      "created": 1800000000,
+      "nonce": "AQEBAQEBAQEBAQEBAQEBAQ",
+      "lifetime": 60,
+      "headers": {
+        "Content-Digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+        "Signature-Input": "sig1=(\"@method\" \"@target-uri\" \"content-digest\");created=1800000000;expires=1800000060;nonce=\"AQEBAQEBAQEBAQEBAQEBAQ\";alg=\"ed25519\";keyid=\"machine:00000000-0000-4000-8000-000000000001#k-10ba682c8ad13513\";tag=\"airdress-machine\"",
+        "Signature": "sig1=:Rz3x+wyn4NU5BoAvw1Q4rD1C9ep44rhy7/cn5fjhiLQZLP16AssSsldEI0zePaQ2qyE4fB1FxlExWCtcrhKhBw==:"
+      }
+    }
+  ],
+  "frames": [
+    {
+      "type": "call",
+      "frame": "{\"action\":\"button.press\",\"callId\":\"6f1b3f2e-2c5a-4b8e-9d7e-0a1b2c3d4e5f\",\"data\":null,\"function\":\"probe\",\"notAfter\":1800000010,\"seq\":2,\"session\":\"0a0b0c0d-0000-4000-8000-000000000002\",\"targets\":[\"button.office_pc\"]}",
+      "sig": "7DN2wP81T1MBorvBc93sdeXFZtsIKexfeiTiUDtcdCfSss5BzqKZrFCYIN4rViNrJutvxu2KDjiKN6Xv36o-CA"
+    }
+  ]
+}
