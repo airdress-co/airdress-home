@@ -1,0 +1,74 @@
+# Publishes airdress-home and airdress to PyPI by trusted publishing when a
+# release tag `vX.Y.Z` is pushed. No token exists anywhere: PyPI trusts this
+# workflow file in this repository, in the `pypi` environment, for each of the
+# two projects. Those two trusted publishers are configured on PyPI by an
+# owner; until they are, a tag push fails at the publish step and publishes
+# nothing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: The tag names the airdress-home version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(uv version --short)
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag does not match airdress-home $version" >&2
+            exit 1
+          fi
+      - run: uv sync --locked
+      - run: uv run pytest -q tests
+      - run: uv build --out-dir dist/airdress-home
+      - run: uv build airdress --out-dir dist/airdress
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-airdress-home:
+    name: Publish airdress-home
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/airdress-home/
+
+  # After airdress-home, because it depends on it.
+  publish-airdress:
+    name: Publish airdress
+    needs: publish-airdress-home
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/airdress/
+          # airdress keeps its own version (0.0.0 until its API changes); a
+          # release that did not bump it is not an error.
+          skip-existing: true

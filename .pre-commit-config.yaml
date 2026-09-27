@@ -1,0 +1,46 @@
+# Run with `prek run --all-files` (or pre-commit). CI runs the same.
+# Hook revisions are pinned by commit SHA; the tag each one is sits beside it.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: 805f85e558841bf4d852335e036b33d2b26be1cc # frozen: v1.7.12.25
+    hooks:
+      - id: actionlint
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+
+      - id: no-internal-refs
+        name: no internal document numbers
+        # This repository is public: internal process identifiers (design,
+        # runbook and research-record numbers) must not appear in it.
+        entry: '(?i)\b(spec|rb|rdr|rcp)[_-]?[0-9]{3}\b'
+        language: pygrep
+        exclude: ^\.pre-commit-config\.yaml$
+
+      - id: no-ai-attribution
+        name: no AI tool references
+        entry: '(?i)\b(claude|anthropic|copilot co-authored)\b'
+        language: pygrep
+        exclude: ^\.pre-commit-config\.yaml$
