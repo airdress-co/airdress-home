@@ -78,9 +78,12 @@ def check_origin(origin: str) -> str:
     return f"https://{parts.hostname.lower()}{port}"
 
 
-async def start(http: aiohttp.ClientSession, *, hub: str = DEFAULT_HUB) -> LinkStarted:
-    """Begin a rendezvous."""
-    async with http.post(_hub(hub, "/api/link/start"), json={}) as resp:
+async def start(
+    http: aiohttp.ClientSession, *, hub: str = DEFAULT_HUB, client_name: str | None = None
+) -> LinkStarted:
+    """Begin a rendezvous. ``client_name`` is shown to the owner at the hub."""
+    body = {"client_name": client_name} if client_name else {}
+    async with http.post(_hub(hub, "/api/link/start"), json=body) as resp:
         if resp.status >= 300:
             raise await _error(resp)
         raw = await resp.json()
@@ -103,20 +106,26 @@ async def poll(http: aiohttp.ClientSession, started: LinkStarted, *, hub: str = 
         async with http.post(
             _hub(hub, "/api/link/poll"), json={"device_code": started.device_code}
         ) as resp:
-            if resp.status < 300:
+            if resp.status >= 300:
+                err = await _error(resp)
+                if err.code != "temporarily_unavailable":
+                    raise err
+                raw: dict[str, object] = {"status": "pending"}
+            else:
                 raw = await resp.json()
-                return check_origin(str(raw["origin"]))
-            err = await _error(resp)
-        if err.code == "slow_down":
+        status = raw.get("status")
+        if status == "bound":
+            return check_origin(str(raw["origin"]))
+        if status == "slow_down":
             interval += 5
-        elif err.code in ("access_denied", "denied"):
-            raise EnrollmentDenied(err.code, err.description)
-        elif err.code in ("expired_token", "expired"):
-            raise EnrollmentExpired(err.code, err.description)
-        elif err.code not in ("authorization_pending", "pending"):
-            raise err
+        elif status == "denied":
+            raise EnrollmentDenied("denied", "the owner declined at the hub")
+        elif status == "expired":
+            raise EnrollmentExpired("expired", "the link code expired")
+        elif status != "pending":
+            raise EnrollmentError("unexpected", f"the hub answered status {status!r}")
         if time.monotonic() >= deadline:
-            raise EnrollmentExpired("expired_token", "the owner did not link in time")
+            raise EnrollmentExpired("expired", "the owner did not link in time")
 
 
 async def enrolled(
