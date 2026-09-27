@@ -87,6 +87,10 @@ class Started:
     """Computed here from the key whose proof verified, never read from the answer."""
 
 
+#: The enrollment purpose a Home Assistant hub declares.
+PURPOSE_HOME_ASSISTANT = "home-assistant"
+
+
 def _endpoint(operator: str, path: str) -> str:
     return operator.rstrip("/") + path
 
@@ -133,9 +137,16 @@ async def start_enrollment(
     *,
     preauth_key: str | None = None,
     require_proof: bool = False,
+    purpose: str | None = PURPOSE_HOME_ASSISTANT,
 ) -> Started:
-    """Ask ``operator`` to enroll ``key`` as ``name``."""
+    """Ask ``operator`` to enroll ``key`` as ``name``.
+
+    ``purpose`` tells the owner what is asking and lets the approval link it
+    as a Home in the same step; an operator that predates purposes ignores it.
+    """
     body: dict[str, Any] = {"public_key": key.public_b64, "name": name}
+    if purpose is not None:
+        body["purpose"] = purpose
     if preauth_key is not None:
         if not operator.startswith("https://"):
             raise EnrollmentError("insecure_origin", "a pre-auth key is sent only over https")
