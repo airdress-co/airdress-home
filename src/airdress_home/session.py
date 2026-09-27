@@ -141,7 +141,7 @@ class HomeSession:
             return f"not_authorized_{e.code}"
         except ChannelClosed as e:
             return e.reason
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure to connect is retried
             return f"open_{type(e).__name__}"
         self.stats.connects += 1
         self._connected.set()
@@ -161,7 +161,7 @@ class HomeSession:
         except ProtocolError as e:
             _LOGGER.warning("closing the channel: %s", e)
             return "protocol"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a dropped channel is reconnected
             return f"error_{type(e).__name__}"
         finally:
             with contextlib.suppress(Exception):
@@ -235,7 +235,7 @@ class HomeSession:
             outcome, response = await self.handler.call(
                 action, [str(t) for t in targets], body.get("data"), str(body.get("function", ""))
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - reported to the operator, never raised
             outcome, response = "failed", None
         ms = (time.monotonic() - t0) * 1000
         self.stats.calls += 1
@@ -250,7 +250,7 @@ class HomeSession:
         else:
             try:
                 outcome, state, changed = await self.handler.read(entity)
-            except Exception:
+            except Exception:  # noqa: BLE001 - reported to the operator
                 outcome, state, changed = "failed", None, None
         ms = (time.monotonic() - t0) * 1000
         self.stats.reads += 1

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from airdress_home.codes import (
     MachineKey,
     b64url,
@@ -11,6 +13,7 @@ from airdress_home.codes import (
     confirmation_code,
     verify_answer,
 )
+from airdress_home.errors import ProtocolError
 from airdress_home.frames import signed_bytes, verify
 from airdress_home.httpsig import sign_request
 
@@ -68,9 +71,5 @@ def test_frames_verify_under_the_pinned_key_only() -> None:
         frame = verify({"type": f["type"], "frame": f["frame"], "sig": f["sig"]}, op.public)
         assert frame.seq == 2
         other = MachineKey(bytes(32)).public
-        try:
+        with pytest.raises(ProtocolError, match="does not verify"):
             verify({"type": f["type"], "frame": f["frame"], "sig": f["sig"]}, other)
-        except Exception as e:
-            assert "does not verify" in str(e)
-        else:
-            raise AssertionError("a frame verified under another key")

@@ -63,6 +63,7 @@ class PollChannel:
         self._session: str | None = None
         self._acked = 0
         self._generation = 0
+        self._retiring: set[int] = set()
         self._queue: asyncio.Queue[dict[str, Any] | _Ended | BaseException] = asyncio.Queue()
         self._responses: dict[int, aiohttp.ClientResponse] = {}
         self._tasks: set[asyncio.Task[None]] = set()
@@ -115,12 +116,12 @@ class PollChannel:
                 line = parse_line(raw)
                 if line is None:
                     continue
-                if generation != self._generation:
+                if generation in self._retiring:
                     self.stats.overlap_lines += 1
                 await self._queue.put(line)
         except (aiohttp.ClientError, TimeoutError, asyncio.IncompleteReadError) as e:
             reason = f"read_{type(e).__name__}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - handed to the reader of lines()
             await self._queue.put(e)
             return
         finally:
@@ -133,16 +134,25 @@ class PollChannel:
             await asyncio.sleep(self._rotate)
             if self._closed:
                 return
+            # The operator ends the current poll as soon as it attaches the
+            # next one, which can be before the next one's headers reach us:
+            # its end is expected from here on, not a drop.
+            retiring = self._generation
+            self._retiring.add(retiring)
             try:
                 await self._start_poll()
                 self.stats.rotations += 1
-            except BaseException as e:
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - ends the channel
                 self.stats.rotation_failures += 1
-                await self._queue.put(e if isinstance(e, Exception) else ChannelClosed("rotate"))
+                self._retiring.discard(retiring)
+                await self._queue.put(e)
                 return
 
     async def open(self) -> None:
         self._closed = False
+        self._retiring.clear()
         await self._start_poll()
         self.stats.opens += 1
         self._spawn(self._rotate_loop())
@@ -153,7 +163,9 @@ class PollChannel:
             if isinstance(item, dict):
                 yield item
             elif isinstance(item, _Ended):
-                if item.generation == self._generation:
+                if item.generation in self._retiring:
+                    self._retiring.discard(item.generation)
+                elif item.generation == self._generation:
                     raise ChannelClosed(f"poll_ended_{item.reason}")
             else:
                 if isinstance(item, ChannelClosed):
