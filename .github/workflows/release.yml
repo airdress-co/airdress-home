@@ -9,13 +9,55 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Run by hand to ask PyPI whether a trusted publisher matches this workflow
+  # before a tag is pushed. It builds and publishes nothing.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Exchanges this run's OIDC token at PyPI exactly as the publish action does,
+  # and reports the answer. The minted token is masked and never used. PyPI
+  # matches a publisher on repository, workflow file and environment, which is
+  # why this lives in this file and runs in the `pypi` environment. When the
+  # match is a pending publisher, PyPI creates that (empty) project on this
+  # exchange, as it would on the first publish.
+  check-publisher:
+    name: Check the trusted publisher
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Exchange the OIDC token at PyPI
+        run: |
+          audience=$(curl -fsS https://pypi.org/_/oidc/audience | jq -r .audience)
+          oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
+          echo "::add-mask::$oidc"
+          body=$(jq -n --arg token "$oidc" '{token: $token}')
+          answer=$(curl -sS -o /tmp/answer.json -w '%{http_code}' \
+            -X POST https://pypi.org/_/oidc/mint-token -d "$body")
+          if [ "$answer" = 200 ]; then
+            echo "::add-mask::$(jq -r .token /tmp/answer.json)"
+            echo "PyPI minted a token: a trusted publisher matches this workflow."
+          else
+            echo "PyPI answered $answer:"
+            jq 'del(.token)' /tmp/answer.json
+            exit 1
+          fi
+      - name: Which projects exist now
+        run: |
+          for project in airdress-home airdress; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/simple/$project/")
+            echo "$project: /simple/ answers $code"
+          done
+
   build:
     name: Build
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
