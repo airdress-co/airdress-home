@@ -28,7 +28,7 @@ Home Assistant dependency: it is plain `asyncio` on `aiohttp` and
   - `channel.WsChannel` — a WebSocket;
   - `channel.PollChannel` — a streaming long-poll, rotated before a relay's
     idle timeout, with batched upstream requests.
-- **The rendezvous.** "Sign in with Airdress": the hub at `airdress.co`
+- **The rendezvous.** "Sign in with Airdress": the hub (`account.airdress.co`)
   introduces the hub to the owner's operator without anyone typing an address.
   It never approves and never sees a key.
 
