@@ -25,11 +25,17 @@ Home Assistant dependency: it is plain `asyncio` on `aiohttp` and
 - **One held channel, dialled by the hub.** The hub is behind NAT and the
   operator cannot dial it. The hub keeps a channel open, and the operator sends
   it signed frames: `call` and `read`, which the hub answers, `features` (what
-  the operator's Home declares) and `emit` (an event for the hub). Two
-  transports carry the same frames while one is being chosen by measurement:
+  the operator's Home declares) and `emit` (an event for the hub).
+- **Multi-transport.** Every transport carries the same signed frames, `seq`
+  and session, and each stays:
   - `channel.WsChannel` — a WebSocket;
   - `channel.PollChannel` — a streaming long-poll, rotated before a relay's
-    idle timeout, with batched upstream requests.
+    idle timeout, with batched upstream requests;
+  - `channel.NegotiatingChannel` — what `channel.for_client` returns: it tries
+    the preferred transport first, falls back when its establishment is
+    refused on the way or it keeps dropping early, remembers per network what
+    worked (a `HintStore`; `FileHintStore` keeps it in one small file, holding
+    no address), and probes the preferred transport again after a while.
 - **The rendezvous.** "Sign in with Airdress": the hub (`account.airdress.co`)
   introduces the hub to the owner's operator without anyone typing an address.
   It never approves and never sees a key.
@@ -42,7 +48,7 @@ Every operator frame carries a session, a strictly increasing `seq` and a
 ```python
 import aiohttp
 from airdress_home import MachineKey, MachineClient, HomeSession, start_enrollment, poll_until_decided
-from airdress_home.channel import WsChannel
+from airdress_home.channel import FileHintStore, for_client
 
 async with aiohttp.ClientSession() as http:
     key = MachineKey.generate()
@@ -51,7 +57,8 @@ async with aiohttp.ClientSession() as http:
     enrollment = await poll_until_decided(http, "https://<your airdress>", key, started)
 
     client = MachineClient(http, key, enrollment)
-    session = HomeSession(WsChannel(client), handler, enrollment.pinned_key)
+    channel = for_client(client, hints=FileHintStore("transport-hints.json"))
+    session = HomeSession(channel, handler, enrollment.pinned_key)
     await session.run()
 ```
 
@@ -61,7 +68,7 @@ operator sends (60 calls and 60 emits a minute by default), and
 `airdress_home.is_sensitive` names the entities — locks, alarm panels, and
 entry-point or unclassified covers — that the hub must refuse to operate unless
 its user opted each one in. Applications hold `channel.for_client(client)`
-rather than naming a transport.
+rather than naming a transport; `channel.name` is the transport in use.
 
 ## The `airdress` package
 

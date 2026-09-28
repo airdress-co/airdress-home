@@ -22,8 +22,15 @@ class ChannelStats:
 class Channel(Protocol):
     """A transport for the frames of one home session."""
 
-    name: str
-    stats: ChannelStats
+    @property
+    def name(self) -> str:
+        """The transport's name, as the operator reports it (``ws``, ``poll``)."""
+        ...
+
+    @property
+    def stats(self) -> ChannelStats:
+        """What the transport counted."""
+        ...
 
     async def open(self) -> None:
         """Establish the channel (signed). Raises on refusal."""

@@ -241,4 +241,7 @@ class PollChannel:
             task.cancel()
         if self._flusher is not None:
             self._flusher.cancel()
+        # Wake a reader still waiting on this channel's lines: its readers were
+        # cancelled above and will never report an end.
+        self._queue.put_nowait(ChannelClosed("closed"))
         self._queue = asyncio.Queue()

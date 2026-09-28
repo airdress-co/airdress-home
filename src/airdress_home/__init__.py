@@ -20,6 +20,7 @@ from .errors import (
     NotAuthorized,
     OperatorProofError,
     ProtocolError,
+    TransportRefused,
 )
 from .machine import (
     PURPOSE_HOME_ASSISTANT,
@@ -58,6 +59,7 @@ __all__ = [
     "SharedEntity",
     "Started",
     "Track",
+    "TransportRefused",
     "confirm_operator",
     "confirmation_code",
     "is_sensitive",

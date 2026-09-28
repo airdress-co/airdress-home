@@ -58,3 +58,11 @@ class ChannelClosed(AirdressHomeError):
         super().__init__(reason if code is None else f"{reason} ({code})")
         self.reason = reason
         self.code = code
+
+
+class TransportRefused(ChannelClosed):
+    """This transport could not be established here, though another may be.
+
+    Raised when a WebSocket upgrade is refused on the way (a proxy that answers
+    it with something other than ``101``, or cuts it), not when the operator
+    refuses the machine: that answer is the same on every transport."""
