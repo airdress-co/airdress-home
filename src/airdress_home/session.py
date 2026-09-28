@@ -9,6 +9,11 @@ ends it reconnects with jittered exponential backoff, 1 s to 60 s.
 A frame whose ``seq`` was already handled is dropped (a long-poll rotation
 can repeat one); a jump in ``seq`` is counted as a gap. Neither is ever
 silently ignored in the statistics.
+
+The hub keeps its own ceilings, which the operator cannot raise: at most
+``max_calls_per_minute`` calls are run (the rest are answered
+``rate_limited``) and ``max_emits_per_minute`` emits handed on (the rest are
+dropped and counted).
 """
 
 from __future__ import annotations
@@ -18,12 +23,14 @@ import contextlib
 import logging
 import random
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from . import frames
+from . import frames, models
 from .errors import ChannelClosed, HomeNotLinked, NotAuthorized, ProtocolError
+from .models import Features, Shared
 
 if TYPE_CHECKING:
     from .channel import Channel
@@ -32,6 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 
 #: How far an operator's clock may run ahead of ours before a frame is refused.
 CLOCK_SKEW = 30
+
+#: How many measurement events :class:`SessionStats` keeps.
+MAX_EVENTS = 256
 
 
 class Handler(Protocol):
@@ -47,8 +57,16 @@ class Handler(Protocol):
         """Read ``entity``; return ``(outcome, state, last_changed)``."""
         ...
 
-    def shared(self) -> dict[str, Any]:
-        """The ``shared`` frame body: what is exposed, at which level."""
+    def shared(self) -> Shared:
+        """What is exposed, at which level."""
+        ...
+
+    def features(self, features: Features) -> None:
+        """The operator declared what its ``Home`` offers the hub."""
+        ...
+
+    def emit(self, event: str, event_type: str, data: dict[str, Any] | None, function: str) -> None:
+        """The operator emitted ``event_type`` on the declared ``event``."""
         ...
 
 
@@ -64,12 +82,33 @@ class SessionStats:
     gap_frames: int = 0
     calls: int = 0
     reads: int = 0
+    emits: int = 0
     refused: int = 0
-    events: list[dict[str, Any]] = field(default_factory=list)
+    rate_limited: int = 0
+    emits_dropped: int = 0
+    events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS))
+    """The most recent events, newest last; older ones are discarded."""
 
     def event(self, kind: str, **values: Any) -> None:
         """Record one event with a wall-clock timestamp."""
         self.events.append({"t": round(time.time(), 3), "kind": kind, **values})
+
+
+class _Window:
+    """A sliding one-minute window of at most ``limit`` admissions."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self._times: deque[float] = deque()
+
+    def admit(self) -> bool:
+        now = time.monotonic()
+        while self._times and now - self._times[0] >= 60:
+            self._times.popleft()
+        if len(self._times) >= self.limit:
+            return False
+        self._times.append(now)
+        return True
 
 
 class HomeSession:
@@ -83,7 +122,10 @@ class HomeSession:
         *,
         backoff_min: float = 1.0,
         backoff_max: float = 60.0,
+        max_calls_per_minute: int = 60,
+        max_emits_per_minute: int = 60,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_connection: Callable[[bool], None] | None = None,
     ) -> None:
         if len(operator_key) != 32:
             raise ValueError("the pinned operator key is 32 bytes")
@@ -94,6 +136,10 @@ class HomeSession:
         self.backoff_max = backoff_max
         self.stats = SessionStats()
         self._on_event = on_event
+        self._on_connection = on_connection
+        self._calls = _Window(max_calls_per_minute)
+        self._emits = _Window(max_emits_per_minute)
+        self._opened = False
         self._session: str | None = None
         self._last_seq = 0
         self._dropped_at: float | None = None
@@ -103,8 +149,37 @@ class HomeSession:
 
     @property
     def connected(self) -> bool:
-        """Whether the channel is up."""
+        """Whether the channel is up and the operator has said ``hello``."""
         return self._connected.is_set()
+
+    def _set_connected(self, up: bool) -> None:
+        if up == self._connected.is_set():
+            return
+        if up:
+            self._connected.set()
+        else:
+            self._connected.clear()
+        if self._on_connection is not None:
+            self._on_connection(up)
+
+    async def open(self) -> None:
+        """Open the channel once, raising why it could not be opened.
+
+        For a caller that must know the channel works before it goes on (a
+        setup that tests its connection). :meth:`run` then carries on with the
+        channel this opened, and reopens it itself from then on.
+
+        Raises :class:`HomeNotLinked`, :class:`NotAuthorized`,
+        :class:`ChannelClosed`, or the transport's own error.
+        """
+        await self.channel.open()
+        self._opened = True
+
+    async def share(self) -> None:
+        """Send what is shared again, after it changed. Does nothing while the
+        channel is down: every ``hello`` is answered with it anyway."""
+        if self.connected and self._session is not None:
+            await self.channel.send(frames.shared(self.handler.shared()))
 
     def _event(self, kind: str, **values: Any) -> None:
         self.stats.event(kind, **values)
@@ -117,7 +192,7 @@ class HomeSession:
         while not self._stop.is_set():
             opened_at = time.monotonic()
             reason = await self._run_once()
-            self._connected.clear()
+            self._set_connected(False)
             if self._stop.is_set():
                 break
             if self._dropped_at is None:
@@ -134,7 +209,10 @@ class HomeSession:
 
     async def _run_once(self) -> str:
         try:
-            await self.channel.open()
+            if self._opened:
+                self._opened = False
+            else:
+                await self.channel.open()
         except HomeNotLinked:
             return "home_not_linked"
         except NotAuthorized as e:
@@ -144,7 +222,6 @@ class HomeSession:
         except Exception as e:  # noqa: BLE001 - any failure to connect is retried
             return f"open_{type(e).__name__}"
         self.stats.connects += 1
-        self._connected.set()
         if self._dropped_at is not None:
             self._event(
                 "ready",
@@ -183,6 +260,7 @@ class HomeSession:
             self.channel.bind(frame.session)
             self.stats.hellos += 1
             self._event("hello", transport=self.channel.name)
+            self._set_connected(True)
         elif frame.session != self._session:
             raise ProtocolError("a frame for another session")
         if frame.seq <= self._last_seq:
@@ -196,16 +274,20 @@ class HomeSession:
         self.stats.frames += 1
         self.channel.acked(frame.seq)
         if frame.type == "hello":
-            await self.channel.send({"type": "shared", **self.handler.shared()})
+            await self.channel.send(frames.shared(self.handler.shared()))
             return
         if frame.not_after + CLOCK_SKEW < now:
             self.stats.refused += 1
-            await self._answer(frame, "expired", 0.0)
+            await self._answer(frame, models.EXPIRED, 0.0)
             return
         if frame.type == "call":
             await self._call(frame)
         elif frame.type == "read":
             await self._read(frame)
+        elif frame.type == "emit":
+            self._emit(frame)
+        elif frame.type == "features":
+            self.handler.features(frames.features(frame.body))
 
     async def _answer(self, frame: frames.OperatorFrame, outcome: str, ms: float) -> None:
         if frame.type == "call":
@@ -227,16 +309,28 @@ class HomeSession:
         body = frame.body
         targets = body.get("targets")
         action = body.get("action")
-        if not isinstance(action, str) or not isinstance(targets, list) or not targets:
-            await self._answer(frame, "rejected", 0.0)
+        data = body.get("data")
+        if (
+            not isinstance(action, str)
+            or not isinstance(targets, list)
+            or not targets
+            or not all(isinstance(t, str) for t in targets)
+            or not (data is None or isinstance(data, dict))
+        ):
+            await self._answer(frame, models.REJECTED, 0.0)
+            return
+        if not self._calls.admit():
+            self.stats.rate_limited += 1
+            await self._answer(frame, models.RATE_LIMITED, 0.0)
             return
         t0 = time.monotonic()
         try:
             outcome, response = await self.handler.call(
-                action, [str(t) for t in targets], body.get("data"), str(body.get("function", ""))
+                action, list(targets), data, str(body.get("function", ""))
             )
-        except Exception:  # noqa: BLE001 - reported to the operator, never raised
-            outcome, response = "failed", None
+        except Exception:
+            _LOGGER.exception("the handler failed a call")
+            outcome, response = models.FAILED, None
         ms = (time.monotonic() - t0) * 1000
         self.stats.calls += 1
         await self.channel.send(frames.result(str(body["callId"]), outcome, ms, response))
@@ -246,17 +340,35 @@ class HomeSession:
         entity = frame.body.get("entity")
         t0 = time.monotonic()
         if not isinstance(entity, str):
-            outcome, state, changed = "rejected", None, None
+            outcome, state, changed = models.REJECTED, None, None
         else:
             try:
                 outcome, state, changed = await self.handler.read(entity)
-            except Exception:  # noqa: BLE001 - reported to the operator
-                outcome, state, changed = "failed", None, None
+            except Exception:
+                _LOGGER.exception("the handler failed a read")
+                outcome, state, changed = models.FAILED, None, None
         ms = (time.monotonic() - t0) * 1000
         self.stats.reads += 1
         await self.channel.send(
             frames.read_result(str(frame.body["readId"]), outcome, ms, state, changed)
         )
+
+    def _emit(self, frame: frames.OperatorFrame) -> None:
+        body = frame.body
+        event, event_type, data = body.get("event"), body.get("eventType"), body.get("data")
+        if (
+            not models.valid_name(event)
+            or not models.valid_name(event_type)
+            or not (data is None or isinstance(data, dict))
+            or not self._emits.admit()
+        ):
+            self.stats.emits_dropped += 1
+            return
+        self.stats.emits += 1
+        try:
+            self.handler.emit(event, event_type, data, str(body.get("function", "")))
+        except Exception:
+            _LOGGER.exception("the handler failed an emit")
 
     def force_drop(self) -> None:
         """Cut the transport as a network failure would; the session reconnects."""
