@@ -59,6 +59,7 @@ class Fake:
         self.attempts = 0
         self.end = "eof"
         self.aborted = 0
+        self.resuming: str | None = None
         self._ended = asyncio.Event()
 
     async def open(self) -> None:
@@ -275,6 +276,62 @@ async def test_a_forced_cut_is_not_an_early_drop() -> None:
             await it.__anext__()
         await ch.close()
     assert ch.negotiation.early_drops == 0
+
+
+async def test_a_reattached_poll_is_timed_from_its_sessions_hello() -> None:
+    """The operator ends a long-poll session an hour after its hello with a bare
+    end of stream; a poll that re-attached shortly before is not an early drop."""
+    ws, poll = Fake("ws"), Fake("poll")
+    ws.refuse = [TransportRefused("handshake_400")]
+    mono, store = Clock(), MemoryHintStore()
+    ch = negotiator(ws, poll, store=store, mono=mono)
+    await ch.open()
+    ch.bind("s1")  # the operator's hello
+    poll.resuming = "s1"
+    mono.now += 3000  # the session is 50 minutes old
+    await ch.close()
+    for _ in range(5):
+        # A drop, then a re-attach of the same session: no new hello.
+        await ride(ch, poll, "poll_ended_eof", mono, lived=30)
+    assert ch.negotiation.early_drops == 0
+    assert store.hints[NET].transport == "poll"
+
+
+async def test_a_new_session_restarts_the_clock() -> None:
+    """A re-attach the operator answers with a new session is timed from that
+    session's hello."""
+    ws, poll = Fake("ws"), Fake("poll")
+    mono = Clock()
+    ch = negotiator(ws, poll, mono=mono)
+    await ch.open()
+    ch.bind("s1")
+    mono.now += 3600
+    await ch.close()
+    for _ in range(ch.early_drops_limit):
+        await ch.open()
+        ch.bind(f"s-{mono.now}")  # a new session every time
+        it = ch.lines().__aiter__()
+        await it.__anext__()
+        mono.now += 5
+        ws.finish("closed_1006")
+        with pytest.raises(ChannelClosed):
+            await it.__anext__()
+        await ch.close()
+    assert ch.negotiation.early_drops == ch.early_drops_limit
+    assert ch.negotiation.demotions == 1
+
+
+async def test_a_channel_that_never_said_hello_is_timed_from_its_opening() -> None:
+    """A transport that resumes nothing, ending before any hello, dropped early."""
+    ws, poll = Fake("ws"), Fake("poll")
+    mono = Clock()
+    ch = negotiator(ws, poll, mono=mono)
+    await ch.open()
+    ch.bind("s1")
+    mono.now += 3600
+    await ch.close()
+    await ride(ch, ws, "closed_1006", mono, lived=5)
+    assert ch.negotiation.early_drops == 1
 
 
 @pytest.mark.parametrize("refusal", [NotAuthorized("key_revoked"), HomeDisabled("home_disabled")])

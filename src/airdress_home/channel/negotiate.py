@@ -9,9 +9,14 @@ the network between the hub and its operator, not of the protocol.
   establishment is refused on the way (:class:`TransportRefused`: a proxy that
   answers a WebSocket upgrade with something other than ``101``, or cuts it);
 * **demotes a transport that keeps dropping early**: ``early_drops`` channels
-  in a row that ended within ``early_drop`` seconds of opening, for a reason
-  that is not the operator's own (a lifetime close, a revoke, an unlink, a
-  displacement) and not a cut the hub forced;
+  in a row that ended within ``early_drop`` seconds of their session's
+  ``hello``, for a reason that is not the operator's own (a lifetime close, a
+  revoke, an unlink, a displacement) and not a cut the hub forced. A channel
+  is timed from its session's ``hello``, not from its own opening: a
+  long-poll that re-attaches a session gets no new ``hello``, and the
+  operator ends that session an hour after the first one with a bare end of
+  stream, which must not read as an early drop of the re-attached poll. A
+  channel that ends before any ``hello`` is timed from its opening;
 * **remembers per network what worked**, in a small :class:`HintStore`, so the
   next start on that network does not pay for the refusal again;
 * **re-probes the preferred transport** once ``reprobe`` seconds have passed
@@ -45,12 +50,14 @@ from .hints import Hint, HintStore, MemoryHintStore
 if TYPE_CHECKING:
     from .base import Channel
 
-#: The default order, preferred first. **Provisional:** the transport spike
-#: decides the order (and the thresholds below); it does not remove either.
+#: The default order, preferred first, as the transport measurement set it:
+#: the WebSocket, then the long-poll. Neither is removed.
 DEFAULT_ORDER: tuple[str, ...] = ("ws", "poll")
 
-#: A channel that ends sooner than this after opening dropped early.
-EARLY_DROP = 60.0
+#: A channel that ends sooner than this after its session's ``hello`` dropped
+#: early. Above the WebSocket's 90 s close on silence, so one missed liveness
+#: window is not already a verdict.
+EARLY_DROP = 120.0
 #: This many early drops in a row demote a transport on this network.
 EARLY_DROPS = 3
 #: Seconds after the preferred transport failed on a network before it is
@@ -124,6 +131,10 @@ class NegotiatingChannel:
         """The key of the network the last open ran on."""
         self._active: Channel | None = None
         self._opened_at = 0.0
+        self._live_since = 0.0
+        """When the channel's session said ``hello`` (else when it opened)."""
+        self._hellos: dict[str, tuple[str, float]] = {}
+        """Per transport, its last session and when that session said ``hello``."""
         self._reprobing = False
         self._aborted = False
         self._settled = True
@@ -226,6 +237,15 @@ class NegotiatingChannel:
     ) -> None:
         self._active = channel
         self._opened_at = self._clock()
+        # A transport that resumes a session gets no new hello: time it from
+        # the one that session had.
+        resuming = getattr(channel, "resuming", None)
+        known = self._hellos.get(channel.name)
+        self._live_since = (
+            known[1]
+            if resuming is not None and known is not None and known[0] == resuming
+            else self._opened_at
+        )
         self._aborted = False
         self._settled = False
         self._reprobing = reprobing and channel is self.preferred
@@ -250,7 +270,7 @@ class NegotiatingChannel:
         if self._settled or channel is None or net is None:
             return
         self._settled = True
-        lived = self._clock() - self._opened_at
+        lived = self._clock() - self._live_since
         if lived >= self.early_drop:
             self._early[channel.name] = 0
             if self._reprobing:
@@ -302,7 +322,12 @@ class NegotiatingChannel:
             raise
 
     def bind(self, session: str) -> None:
+        """The operator's ``hello`` named ``session``: the channel is timed from here."""
         if self._active is not None:
+            known = self._hellos.get(self._active.name)
+            if known is None or known[0] != session:
+                self._hellos[self._active.name] = (session, self._clock())
+                self._live_since = self._clock()
             self._active.bind(session)
 
     def acked(self, seq: int) -> None:

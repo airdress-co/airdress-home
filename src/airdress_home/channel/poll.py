@@ -183,6 +183,12 @@ class PollChannel:
                     raise item
                 raise ChannelClosed(f"error_{type(item).__name__}") from item
 
+    @property
+    def resuming(self) -> str | None:
+        """The session the next :meth:`open` asks to re-attach, if any. The
+        operator answers a re-attach with no new ``hello``."""
+        return self._session
+
     def bind(self, session: str) -> None:
         if session != self._session:
             self._session = session
