@@ -22,8 +22,9 @@ Home Assistant dependency: it is plain `asyncio` on `aiohttp` and
   same key.
 - **One held channel, dialled by the hub.** The hub is behind NAT and the
   operator cannot dial it. The hub keeps a channel open, and the operator sends
-  it signed `call` and `read` frames. Two transports carry the same frames
-  while one is being chosen by measurement:
+  it signed frames: `call` and `read`, which the hub answers, `features` (what
+  the operator's Home declares) and `emit` (an event for the hub). Two
+  transports carry the same frames while one is being chosen by measurement:
   - `channel.WsChannel` — a WebSocket;
   - `channel.PollChannel` — a streaming long-poll, rotated before a relay's
     idle timeout, with batched upstream requests.
@@ -52,7 +53,13 @@ async with aiohttp.ClientSession() as http:
     await session.run()
 ```
 
-`handler` implements `airdress_home.Handler`: `call`, `read` and `shared`.
+`handler` implements `airdress_home.Handler`: `call`, `read`, `shared`,
+`features` and `emit`. The session keeps the hub's own ceilings whatever the
+operator sends (60 calls and 60 emits a minute by default), and
+`airdress_home.is_sensitive` names the entities — locks, alarm panels, and
+entry-point or unclassified covers — that the hub must refuse to operate unless
+its user opted each one in. Applications hold `channel.for_client(client)`
+rather than naming a transport.
 
 ## The `airdress` package
 

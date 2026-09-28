@@ -20,16 +20,29 @@ from .errors import (
     OperatorProofError,
     ProtocolError,
 )
-from .machine import Enrollment, MachineClient, Started, poll_until_decided, start_enrollment
+from .machine import (
+    PURPOSE_HOME_ASSISTANT,
+    Enrollment,
+    MachineClient,
+    Started,
+    confirm_operator,
+    poll_until_decided,
+    start_enrollment,
+)
+from .models import EventDeclaration, Features, Shared, SharedEntity
+from .sensitive import is_sensitive
 from .session import Handler, HomeSession, SessionStats
 
 __all__ = [
+    "PURPOSE_HOME_ASSISTANT",
     "AirdressHomeError",
     "ChannelClosed",
     "Enrollment",
     "EnrollmentDenied",
     "EnrollmentError",
     "EnrollmentExpired",
+    "EventDeclaration",
+    "Features",
     "Handler",
     "HomeNotLinked",
     "HomeSession",
@@ -39,8 +52,12 @@ __all__ = [
     "OperatorProofError",
     "ProtocolError",
     "SessionStats",
+    "Shared",
+    "SharedEntity",
     "Started",
+    "confirm_operator",
     "confirmation_code",
+    "is_sensitive",
     "poll_until_decided",
     "start_enrollment",
 ]

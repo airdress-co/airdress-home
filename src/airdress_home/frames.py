@@ -1,5 +1,22 @@
 """The closed frame set, and the verification of the operator's frames.
 
+Operator frames (signed):
+
+* ``hello`` — ``session``, ``protocol``, ``transport``, ``operatorKid``;
+* ``features`` — ``events: [{name, types: [..]}]``, ``notify: {enabled}``,
+  ``trackers: [{name}]``: what the operator's ``Home`` declares;
+* ``call`` — ``callId``, ``action`` (``domain.service``), ``targets`` (entity
+  ids), ``data`` (an object or null), ``function``; answered by ``result``;
+* ``read`` — ``readId``, ``entity``, ``function``; answered by ``read_result``;
+* ``emit`` — ``emitId``, ``event``, ``eventType``, ``data`` (an object or
+  null), ``function``; not answered;
+* ``track`` and ``notify_result``.
+
+Hub frames (unsigned; the channel is machine-signed): ``shared``, ``result``,
+``read_result``, ``state``, ``entity_event``, ``notify``.
+
+Every operator frame also carries ``session``, ``seq`` and ``notAfter``.
+
 The operator sends every frame as a signed envelope::
 
     {"type": "call", "frame": "<the frame as JSON text>", "sig": "<base64url>"}
@@ -20,6 +37,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .codes import b64url_decode
 from .errors import ProtocolError
+from .models import (
+    MAX_EVENT_TYPES,
+    MAX_EVENTS,
+    EventDeclaration,
+    Features,
+    Shared,
+    valid_name,
+)
 
 SUBPROTOCOL = "airdress.home.v1"
 PROTOCOL_VERSION = 1
@@ -116,3 +141,58 @@ def read_result(
         "lastChanged": last_changed,
         "haMs": round(ha_ms, 3),
     }
+
+
+def shared(value: Shared) -> dict[str, Any]:
+    """A ``shared`` frame. Operate implies observe, so every operate entity is
+    listed at observe too."""
+    observe = {e.entity: e for e in value.observe}
+    for e in value.operate:
+        observe.setdefault(e.entity, e)
+    return {
+        "type": "shared",
+        "integrationVersion": value.integration_version,
+        "haVersion": value.hub_version,
+        "operate": [e.to_wire() for e in value.operate],
+        "observe": [e.to_wire() for e in observe.values()],
+    }
+
+
+def features(body: dict[str, Any]) -> Features:
+    """The declarations of a verified ``features`` frame.
+
+    A malformed declaration is left out and counted, never raised: the frame
+    is signed by the operator, and one bad entry must not end the channel.
+    """
+    dropped = 0
+    events: list[EventDeclaration] = []
+    seen: set[str] = set()
+    raw_events = body.get("events")
+    for raw in raw_events if isinstance(raw_events, list) else []:
+        name = raw.get("name") if isinstance(raw, dict) else None
+        types = raw.get("types") if isinstance(raw, dict) else None
+        if (
+            not valid_name(name)
+            or name in seen
+            or not isinstance(types, list)
+            or not types
+            or len(types) > MAX_EVENT_TYPES
+            or not all(valid_name(t) for t in types)
+            or len(events) >= MAX_EVENTS
+        ):
+            dropped += 1
+            continue
+        seen.add(name)
+        events.append(EventDeclaration(name=name, types=tuple(dict.fromkeys(types))))
+    notify = body.get("notify")
+    trackers = body.get("trackers")
+    return Features(
+        events=tuple(events),
+        notify=isinstance(notify, dict) and notify.get("enabled") is True,
+        trackers=tuple(
+            t["name"]
+            for t in (trackers if isinstance(trackers, list) else [])
+            if isinstance(t, dict) and valid_name(t.get("name"))
+        ),
+        dropped=dropped,
+    )
