@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from ..errors import ChannelClosed, HomeNotLinked, NotAuthorized
+from ..errors import ChannelClosed, HomeNotLinked, NotAuthorized, TransportRefused
 from ..frames import SUBPROTOCOL, parse_line
 from .base import ChannelStats
 
@@ -52,7 +52,18 @@ class WsChannel:
                 raise HomeNotLinked(str(e.message)) from e
             if e.status == 401:
                 raise NotAuthorized(str(e.message)) from e
-            raise ChannelClosed(f"handshake_{e.status}") from e
+            if 500 <= e.status < 600 and e.status != 501:
+                # The operator or the relay in trouble: no other transport
+                # would fare better, so this is not a refused upgrade.
+                raise ChannelClosed(f"handshake_{e.status}") from e
+            # Anything else answered instead of 101 — including a 200 from a
+            # proxy that does not upgrade — refuses this transport, here.
+            raise TransportRefused(f"handshake_{e.status}") from e
+        except aiohttp.ClientConnectorError:
+            raise  # the operator is unreachable, whatever the transport
+        except aiohttp.ClientError as e:
+            # Reached, then cut during the upgrade: what a filtering middlebox does.
+            raise TransportRefused(f"handshake_{type(e).__name__}") from e
         self.stats.opens += 1
 
     async def lines(self) -> AsyncIterator[dict[str, Any]]:
