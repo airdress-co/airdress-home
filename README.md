@@ -9,9 +9,9 @@ This is the protocol library the Home Assistant integration uses. It has no
 Home Assistant dependency: it is plain `asyncio` on `aiohttp` and
 `cryptography`, strictly typed.
 
-> **Status: beta (0.1.0b1).** It still carries both channel
-> transports; 0.1.0 keeps the one measurement chooses, and the API may change
-> until then.
+> **Status: beta (0.1.0b1).** Both channel transports stay and are
+> negotiated; 0.1.0 follows once their default order and fallback thresholds
+> are measured, and the API may change until then.
 
 ## What it does
 
