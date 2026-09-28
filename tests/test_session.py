@@ -13,7 +13,7 @@ from airdress_home.channel import ChannelStats
 from airdress_home.codes import MachineKey, b64url
 from airdress_home.errors import ChannelClosed, ProtocolError
 from airdress_home.frames import signed_bytes
-from airdress_home.models import Features, Shared, SharedEntity
+from airdress_home.models import Features, Shared, SharedEntity, Track
 from airdress_home.session import HomeSession
 
 OP = MachineKey(bytes([9]) * 32)
@@ -74,6 +74,7 @@ class Handler:
         self.calls: list[tuple[str, list[str]]] = []
         self.features_seen: list[Features] = []
         self.emitted: list[tuple[str, str, dict[str, Any] | None, str]] = []
+        self.tracks: list[Track] = []
 
     async def call(
         self, action: str, targets: list[str], data: dict[str, Any] | None, function: str
@@ -92,6 +93,9 @@ class Handler:
 
     def emit(self, event: str, event_type: str, data: dict[str, Any] | None, function: str) -> None:
         self.emitted.append((event, event_type, data, function))
+
+    def track(self, track: Track) -> None:
+        self.tracks.append(track)
 
 
 async def run_until_done(s: HomeSession, ch: Script) -> None:
@@ -314,3 +318,184 @@ def test_measurement_events_are_bounded() -> None:
     for _ in range(1000):
         s.stats.event("x")
     assert len(s.stats.events) == 256
+
+
+async def test_operator_additions_hello_home_features_and_track() -> None:
+    ch = Script(
+        [
+            signed("hello", 1, home="home"),
+            signed(
+                "features",
+                2,
+                home="home",
+                events=[],
+                observe=["sensor.washer", 7],
+                observeAttributes={"sensor.washer": ["status", 1], "bad": ["x"]},
+                deprecation=None,
+            ),
+            signed(
+                "track",
+                3,
+                trackId="t1",
+                tracker="jefe",
+                lat=52.5,
+                lon=13.4,
+                accuracyM=None,
+                function="location-to-home",
+            ),
+            signed("track", 4, trackId="t2", tracker="jefe", lat=91, lon=0, accuracyM=5),
+            signed("track", 5, trackId="t3", tracker="jefe", lat=True, lon=0, accuracyM=5),
+        ]
+    )
+    h = Handler()
+    s = HomeSession(ch, h, OP.public, backoff_min=0.01)
+    await run_until_done(s, ch)
+    assert s.home == "home"
+    (f,) = h.features_seen
+    assert f.home == "home" and f.observe == ("sensor.washer",)
+    assert f.observe_attributes == {"sensor.washer": ("status",)}
+    assert h.tracks == [Track("t1", "jefe", 52.5, 13.4, None, "location-to-home")]
+    assert s.stats.refused == 2
+    assert not [f for f in ch.sent if f["type"] not in ("shared",)], "a track is not answered"
+
+
+class Held(Script):
+    """A channel that says hello, then holds until released."""
+
+    def __init__(self, *extra: dict[str, Any]) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.pending: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.close_code: int | None = None
+
+    async def lines(self) -> AsyncIterator[dict[str, Any]]:
+        yield signed("hello", 1)
+        while not self.gate.is_set():
+            try:
+                yield await asyncio.wait_for(self.pending.get(), 0.01)
+            except TimeoutError:
+                continue
+        code = self.close_code
+        raise ChannelClosed(f"closed_{code}" if code else "done", code)
+
+
+async def _up(s: HomeSession) -> asyncio.Task[None]:
+    task = asyncio.create_task(s.run())
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if s.connected:
+            break
+    return task
+
+
+async def test_notify_returns_the_operators_outcome() -> None:
+    ch = Held()
+    s = HomeSession(ch, Handler(), OP.public, backoff_min=5)
+    with pytest.raises(ChannelClosed):
+        await s.notify("before the channel")
+    task = await _up(s)
+    pending = asyncio.create_task(s.notify("The washer is done", title="Laundry"))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if [f for f in ch.sent if f["type"] == "notify"]:
+            break
+    (sent,) = [f for f in ch.sent if f["type"] == "notify"]
+    assert sent["text"] == "The washer is done" and sent["title"] == "Laundry"
+    await ch.pending.put(
+        signed("notify_result", 2, messageId=sent["messageId"], outcome="rate_limited")
+    )
+    assert await asyncio.wait_for(pending, 2) == "rate_limited"
+
+    other = asyncio.create_task(s.notify("x"))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if len([f for f in ch.sent if f["type"] == "notify"]) == 2:
+            break
+    second = [f for f in ch.sent if f["type"] == "notify"][1]
+    assert "title" not in second
+    await ch.pending.put(signed("notify_result", 3, messageId=second["messageId"], outcome="odd"))
+    assert await asyncio.wait_for(other, 2) == "failed", "an unknown outcome is a failure"
+
+    dropped = asyncio.create_task(s.notify("lost"))
+    await asyncio.sleep(0.05)
+    ch.gate.set()
+    with pytest.raises(ChannelClosed):
+        await asyncio.wait_for(dropped, 2)
+    await s.stop()
+    await asyncio.wait_for(task, 2)
+
+
+async def test_state_and_entity_events_stream_only_while_connected() -> None:
+    from airdress_home.frames import entity_state
+
+    ch = Held()
+    s = HomeSession(ch, Handler(), OP.public, backoff_min=5)
+    await s.send_state("sensor.washer", entity_state("idle", {}, "t0"))
+    assert ch.sent == []
+    task = await _up(s)
+    await s.send_state(
+        "sensor.washer",
+        entity_state("running", {"status": "wash"}, "t1"),
+        entity_state("idle", {}, "t0"),
+    )
+    await s.send_state("sensor.washer", entity_state("done", {}, "t2"))
+    await s.send_entity_event("event.doorbell", "ring", {"x": 1}, "t3")
+    await s.send_entity_event("event.doorbell", "ring")
+    sent = [f for f in ch.sent if f["type"] != "shared"]
+    assert sent == [
+        {
+            "type": "state",
+            "entity": "sensor.washer",
+            "newState": {"state": "running", "attributes": {"status": "wash"}, "lastChanged": "t1"},
+            "oldState": {"state": "idle", "attributes": {}, "lastChanged": "t0"},
+        },
+        {
+            "type": "state",
+            "entity": "sensor.washer",
+            "newState": {"state": "done", "attributes": {}, "lastChanged": "t2"},
+        },
+        {
+            "type": "entity_event",
+            "entity": "event.doorbell",
+            "eventType": "ring",
+            "attributes": {"x": 1},
+            "firedAt": "t3",
+        },
+        {"type": "entity_event", "entity": "event.doorbell", "eventType": "ring"},
+    ]
+    ch.gate.set()
+    await s.stop()
+    await asyncio.wait_for(task, 2)
+
+
+async def test_a_revoked_channel_is_not_reopened() -> None:
+    ch = Held()
+    ch.close_code = 4003
+    revoked: list[bool] = []
+    s = HomeSession(
+        ch, Handler(), OP.public, backoff_min=0.01, on_revoked=lambda: revoked.append(True)
+    )
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.wait_for(task, 2)
+    assert s.revoked and revoked == [True]
+    assert ch.opened == 1
+
+
+async def test_unlinked_backs_off_to_the_maximum() -> None:
+    ch = Held()
+    ch.close_code = 4004
+    s = HomeSession(ch, Handler(), OP.public, backoff_min=0.01, backoff_max=30)
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.sleep(0.2)
+    assert ch.opened == 1, "an unlinked home is retried at the slowest pace"
+    await s.stop()
+    await asyncio.wait_for(task, 2)
+
+
+def test_read_result_attributes_only_when_given() -> None:
+    from airdress_home.frames import read_result
+
+    assert "attributes" not in read_result("r", "ok", 1.0, "on", "t")
+    assert read_result("r", "ok", 1.0, "on", "t", {"a": 1})["attributes"] == {"a": 1}

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from ..errors import ChannelClosed, HomeNotLinked, NotAuthorized
+from ..errors import ChannelClosed, HomeDisabled, HomeNotLinked, NotAuthorized
 from ..frames import parse_line
 from .base import ChannelStats
 
@@ -95,8 +95,19 @@ class PollChannel:
         except (aiohttp.ClientError, TimeoutError) as e:
             raise ChannelClosed(f"poll_{type(e).__name__}") from e
         if resp.status == 403:
+            try:
+                raw = await resp.json(content_type=None)
+                code = (
+                    str(raw["error"]["code"])
+                    if isinstance(raw.get("error"), dict)
+                    else str(raw.get("error", ""))
+                )
+            except (ValueError, AttributeError, KeyError, TypeError, aiohttp.ClientError):
+                code = ""
             resp.release()
-            raise HomeNotLinked("home_not_linked")
+            if code == "home_disabled":
+                raise HomeDisabled(code)
+            raise HomeNotLinked(code or "home_not_linked")
         if resp.status != 200:
             resp.release()
             raise ChannelClosed(f"poll_http_{resp.status}")

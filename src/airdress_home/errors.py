@@ -40,6 +40,13 @@ class HomeNotLinked(AirdressHomeError):
     """This machine is enrolled but not linked as a home."""
 
 
+class HomeDisabled(HomeNotLinked):
+    """The ``Home`` naming this machine is switched off, or its link is not
+    sound (another ``Home`` claims the machine, or the machine holds grants).
+    Only a long-poll can tell this from :class:`HomeNotLinked`: a refused
+    WebSocket upgrade carries no body the client can read."""
+
+
 class ProtocolError(AirdressHomeError):
     """A frame outside the protocol, or one that failed verification."""
 
