@@ -1,6 +1,7 @@
 """The hub rendezvous: finding the owner's operator without typing its address.
 
-The hub (``airdress.co``) only introduces. It never approves a machine and
+The hub (its API at ``account.airdress.co``; the owner-facing page it names is
+``airdress.co/link``) only introduces. It never approves a machine and
 never sees a machine key:
 
 1. :func:`start` — ``POST /api/link/start``. Show the owner the
@@ -30,7 +31,9 @@ import aiohttp
 
 from .errors import EnrollmentDenied, EnrollmentError, EnrollmentExpired
 
-DEFAULT_HUB = "https://airdress.co"
+DEFAULT_HUB = "https://account.airdress.co"
+"""Where the hub's link API is served. ``airdress.co`` itself is the static
+site: it serves the ``/link`` page the owner opens, not the API."""
 
 
 @dataclass(frozen=True)
