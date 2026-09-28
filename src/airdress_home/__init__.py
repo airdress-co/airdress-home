@@ -30,6 +30,7 @@ from .machine import (
     confirm_operator,
     poll_until_decided,
     start_enrollment,
+    start_reauth,
 )
 from .models import EventDeclaration, Features, Shared, SharedEntity, Track
 from .sensitive import is_sensitive
@@ -65,6 +66,7 @@ __all__ = [
     "is_sensitive",
     "poll_until_decided",
     "start_enrollment",
+    "start_reauth",
 ]
 
 __version__ = "0.1.0b1"

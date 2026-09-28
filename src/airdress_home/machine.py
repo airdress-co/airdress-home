@@ -157,6 +157,12 @@ async def start_enrollment(
         if resp.status >= 400:
             raise await _error_of(resp)
         raw = await resp.json()
+    started = _started(raw, key)
+    confirm_operator(started, operator, key, require_proof=require_proof)
+    return started
+
+
+def _started(raw: dict[str, Any], key: MachineKey) -> Started:
     op_key = raw.get("operator_key") or {}
     started = Started(
         device_code=raw["device_code"],
@@ -172,7 +178,32 @@ async def start_enrollment(
     )
     if started.fingerprint != key.fingerprint:
         raise EnrollmentError("fingerprint_mismatch", "the operator reported another key")
-    confirm_operator(started, operator, key, require_proof=require_proof)
+    return started
+
+
+async def start_reauth(client: MachineClient) -> Started:
+    """Ask the operator to approve this machine again, after its approval lapsed.
+
+    Signed with the machine's current key; polled with
+    :func:`poll_until_decided`, and compared and approved by the owner like an
+    enrollment. The machine keeps its id, its key, its grants and whatever it
+    is linked as. The answer must come from the operator key the machine
+    pinned. A **revoked** machine is refused (:class:`NotAuthorized`): it can
+    only enroll again, as a new machine.
+    """
+    resp = await client.request("POST", "/v1/machines/reauth", b"")
+    try:
+        if resp.status == 404:
+            raise EnrollmentError("not_enabled", "this operator does not enroll machines")
+        if resp.status >= 400:
+            raise await _error_of(resp)
+        raw = await resp.json()
+    finally:
+        resp.release()
+    started = _started(raw, client.key)
+    confirm_operator(started, client.origin, client.key, require_proof=True)
+    if started.operator_key != client.enrollment.operator_key:
+        raise OperatorProofError("the answer is signed by another operator key than the pinned one")
     return started
 
 
