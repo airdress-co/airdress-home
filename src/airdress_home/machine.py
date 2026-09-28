@@ -258,7 +258,12 @@ class MachineClient:
         resp = await self.http.request(
             method,
             self.origin + path,
-            data=body,
+            data=body or None,
+            # aiohttp adds ``Content-Type: application/octet-stream`` to a
+            # request that names none, even a body-less GET. The signature
+            # does not cover it, so the operator refuses the request: send
+            # only the headers that were signed.
+            skip_auto_headers=() if content_type else ("Content-Type",),
             headers=signed,
             timeout=client_timeout or aiohttp.ClientTimeout(total=30),
         )
