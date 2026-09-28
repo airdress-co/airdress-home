@@ -23,6 +23,7 @@ import contextlib
 import logging
 import random
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from . import frames, models
 from .errors import ChannelClosed, HomeNotLinked, NotAuthorized, ProtocolError
-from .models import Features, Shared
+from .models import Features, Shared, Track
 
 if TYPE_CHECKING:
     from .channel import Channel
@@ -67,6 +68,10 @@ class Handler(Protocol):
 
     def emit(self, event: str, event_type: str, data: dict[str, Any] | None, function: str) -> None:
         """The operator emitted ``event_type`` on the declared ``event``."""
+        ...
+
+    def track(self, track: Track) -> None:
+        """A function sent the owner's position for a declared tracker."""
         ...
 
 
@@ -126,6 +131,7 @@ class HomeSession:
         max_emits_per_minute: int = 60,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         on_connection: Callable[[bool], None] | None = None,
+        on_revoked: Callable[[], None] | None = None,
     ) -> None:
         if len(operator_key) != 32:
             raise ValueError("the pinned operator key is 32 bytes")
@@ -137,6 +143,12 @@ class HomeSession:
         self.stats = SessionStats()
         self._on_event = on_event
         self._on_connection = on_connection
+        self._on_revoked = on_revoked
+        self.home: str | None = None
+        """The ``Home``'s name as the last ``hello`` gave it."""
+        self.revoked = False
+        """The operator closed the channel as revoked; it is not reopened."""
+        self._notifies: dict[str, asyncio.Future[str]] = {}
         self._calls = _Window(max_calls_per_minute)
         self._emits = _Window(max_emits_per_minute)
         self._opened = False
@@ -153,6 +165,10 @@ class HomeSession:
         return self._connected.is_set()
 
     def _set_connected(self, up: bool) -> None:
+        if not up:
+            for future in self._notifies.values():
+                if not future.done():
+                    future.set_exception(ChannelClosed("dropped"))
         if up == self._connected.is_set():
             return
         if up:
@@ -200,8 +216,20 @@ class HomeSession:
                 self._since_drop_first_call = False
             lived = time.monotonic() - opened_at
             self._event("drop", transport=self.channel.name, reason=reason, lived_s=round(lived, 1))
+            if reason == f"closed_{models.CLOSE_REVOKED}":
+                self.revoked = True
+                if self._on_revoked is not None:
+                    self._on_revoked()
+                break
             if lived > 30:
                 delay = self.backoff_min
+            if reason in (
+                f"closed_{models.CLOSE_UNLINKED}",
+                f"closed_{models.CLOSE_DISPLACED}",
+                "home_not_linked",
+            ):
+                # Nothing on this side changes that by retrying sooner.
+                delay = self.backoff_max
             wait = random.uniform(delay / 2, delay)  # noqa: S311 - jitter, not crypto
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), wait)
@@ -257,6 +285,8 @@ class HomeSession:
             if frame.session != self._session:
                 self._session = frame.session
                 self._last_seq = 0
+            home = frame.body.get("home")
+            self.home = home if isinstance(home, str) else None
             self.channel.bind(frame.session)
             self.stats.hellos += 1
             self._event("hello", transport=self.channel.name)
@@ -288,6 +318,10 @@ class HomeSession:
             self._emit(frame)
         elif frame.type == "features":
             self.handler.features(frames.features(frame.body))
+        elif frame.type == "track":
+            self._track(frame)
+        elif frame.type == "notify_result":
+            self._notify_result(frame)
 
     async def _answer(self, frame: frames.OperatorFrame, outcome: str, ms: float) -> None:
         if frame.type == "call":
@@ -369,6 +403,60 @@ class HomeSession:
             self.handler.emit(event, event_type, data, str(body.get("function", "")))
         except Exception:
             _LOGGER.exception("the handler failed an emit")
+
+    def _track(self, frame: frames.OperatorFrame) -> None:
+        track = frames.track(frame.body)
+        if track is None:
+            self.stats.refused += 1
+            return
+        try:
+            self.handler.track(track)
+        except Exception:
+            _LOGGER.exception("the handler failed a track")
+
+    def _notify_result(self, frame: frames.OperatorFrame) -> None:
+        message_id = frame.body.get("messageId")
+        outcome = frame.body.get("outcome")
+        future = self._notifies.pop(str(message_id), None)
+        if future is not None and not future.done():
+            future.set_result(outcome if outcome in models.NOTIFY_OUTCOMES else models.FAILED)
+
+    async def notify(self, text: str, title: str | None = None) -> str:
+        """Send a message for the owner's Home conversation; return the
+        operator's outcome (``delivered``, ``rate_limited``, ``disabled``,
+        ``too_long``, ``rejected`` or ``failed``).
+
+        Raises :class:`ChannelClosed` while the channel is down, or when it
+        drops before the answer. Never queued; the caller bounds the wait.
+        """
+        if not self.connected:
+            raise ChannelClosed("not_connected")
+        message_id = str(uuid.uuid4())
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._notifies[message_id] = future
+        try:
+            await self.channel.send(frames.notify(message_id, text, title))
+            return await future
+        finally:
+            self._notifies.pop(message_id, None)
+
+    async def send_state(
+        self, entity: str, new_state: dict[str, Any], old_state: dict[str, Any] | None = None
+    ) -> None:
+        """Stream an observed entity's change. Dropped while the channel is down."""
+        if self.connected:
+            await self.channel.send(frames.state(entity, new_state, old_state))
+
+    async def send_entity_event(
+        self,
+        entity: str,
+        event_type: str,
+        attributes: dict[str, Any] | None = None,
+        fired_at: str | None = None,
+    ) -> None:
+        """Stream an observed entity's event. Dropped while the channel is down."""
+        if self.connected:
+            await self.channel.send(frames.entity_event(entity, event_type, attributes, fired_at))
 
     def force_drop(self) -> None:
         """Cut the transport as a network failure would; the session reconnects."""

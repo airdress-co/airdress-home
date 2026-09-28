@@ -2,15 +2,20 @@
 
 Operator frames (signed):
 
-* ``hello`` — ``session``, ``protocol``, ``transport``, ``operatorKid``;
+* ``hello`` — ``session``, ``protocol``, ``transport``, ``operatorKid``, and
+  ``home`` (the ``Home``'s name, or null);
 * ``features`` — ``events: [{name, types: [..]}]``, ``notify: {enabled}``,
-  ``trackers: [{name}]``: what the operator's ``Home`` declares;
+  ``trackers: [{name}]``, ``home``, ``observe`` (entities to stream),
+  ``observeAttributes`` (``{entity: [attribute..]}``), ``deprecation``: what
+  the operator's ``Home`` declares;
 * ``call`` — ``callId``, ``action`` (``domain.service``), ``targets`` (entity
   ids), ``data`` (an object or null), ``function``; answered by ``result``;
 * ``read`` — ``readId``, ``entity``, ``function``; answered by ``read_result``;
 * ``emit`` — ``emitId``, ``event``, ``eventType``, ``data`` (an object or
   null), ``function``; not answered;
-* ``track`` and ``notify_result``.
+* ``track`` — ``trackId``, ``tracker``, ``lat``, ``lon``, ``accuracyM``,
+  ``function``; not answered;
+* ``notify_result`` — ``messageId``, ``outcome``: the answer to ``notify``.
 
 Hub frames (unsigned; the channel is machine-signed): ``shared``, ``result``,
 ``read_result``, ``state``, ``entity_event``, ``notify``.
@@ -30,7 +35,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeIs
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -43,6 +48,7 @@ from .models import (
     EventDeclaration,
     Features,
     Shared,
+    Track,
     valid_name,
 )
 
@@ -131,9 +137,10 @@ def read_result(
     ha_ms: float,
     state: str | None = None,
     last_changed: str | None = None,
+    attributes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """A ``read_result`` frame."""
-    return {
+    """A ``read_result`` frame. ``attributes`` is sent only when given."""
+    frame: dict[str, Any] = {
         "type": "read_result",
         "readId": read_id,
         "outcome": outcome,
@@ -141,6 +148,77 @@ def read_result(
         "lastChanged": last_changed,
         "haMs": round(ha_ms, 3),
     }
+    if attributes is not None:
+        frame["attributes"] = attributes
+    return frame
+
+
+def entity_state(state: str, attributes: dict[str, Any], last_changed: str) -> dict[str, Any]:
+    """One state, as ``state`` frames carry it."""
+    return {"state": state, "attributes": attributes, "lastChanged": last_changed}
+
+
+def state(
+    entity: str, new_state: dict[str, Any], old_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A ``state`` frame: an observed entity changed. Build the states with
+    :func:`entity_state`."""
+    frame: dict[str, Any] = {"type": "state", "entity": entity, "newState": new_state}
+    if old_state is not None:
+        frame["oldState"] = old_state
+    return frame
+
+
+def entity_event(
+    entity: str,
+    event_type: str,
+    attributes: dict[str, Any] | None = None,
+    fired_at: str | None = None,
+) -> dict[str, Any]:
+    """An ``entity_event`` frame: an observed entity fired an event."""
+    frame: dict[str, Any] = {"type": "entity_event", "entity": entity, "eventType": event_type}
+    if attributes is not None:
+        frame["attributes"] = attributes
+    if fired_at is not None:
+        frame["firedAt"] = fired_at
+    return frame
+
+
+def notify(message_id: str, text: str, title: str | None = None) -> dict[str, Any]:
+    """A ``notify`` frame: a message for the owner's Home conversation."""
+    frame: dict[str, Any] = {"type": "notify", "messageId": message_id, "text": text}
+    if title is not None:
+        frame["title"] = title
+    return frame
+
+
+def _number(v: object) -> TypeIs[int | float]:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def track(body: dict[str, Any]) -> Track | None:
+    """The position in a verified ``track`` frame, or ``None`` if malformed."""
+    lat, lon, acc = body.get("lat"), body.get("lon"), body.get("accuracyM")
+    tracker, track_id = body.get("tracker"), body.get("trackId")
+
+    if (
+        not isinstance(track_id, str)
+        or not valid_name(tracker)
+        or not _number(lat)
+        or not _number(lon)
+        or not -90 <= float(lat) <= 90
+        or not -180 <= float(lon) <= 180
+        or not (acc is None or _number(acc))
+    ):
+        return None
+    return Track(
+        track_id=track_id,
+        tracker=tracker,
+        lat=float(lat),
+        lon=float(lon),
+        accuracy_m=None if acc is None else float(acc),
+        function=str(body.get("function", "")),
+    )
 
 
 def shared(value: Shared) -> dict[str, Any]:
@@ -186,7 +264,22 @@ def features(body: dict[str, Any]) -> Features:
         events.append(EventDeclaration(name=name, types=tuple(dict.fromkeys(types))))
     notify = body.get("notify")
     trackers = body.get("trackers")
+    home = body.get("home")
+    raw_observe = body.get("observe")
+    raw_attrs = body.get("observeAttributes")
+    observe_attributes = {
+        entity: tuple(a for a in attrs if isinstance(a, str))
+        for entity, attrs in (raw_attrs.items() if isinstance(raw_attrs, dict) else [])
+        if isinstance(entity, str) and "." in entity and isinstance(attrs, list)
+    }
     return Features(
+        home=home if isinstance(home, str) else None,
+        observe=tuple(
+            e
+            for e in (raw_observe if isinstance(raw_observe, list) else [])
+            if isinstance(e, str) and "." in e
+        ),
+        observe_attributes=observe_attributes,
         events=tuple(events),
         notify=isinstance(notify, dict) and notify.get("enabled") is True,
         trackers=tuple(

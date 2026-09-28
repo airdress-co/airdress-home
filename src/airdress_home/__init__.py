@@ -15,6 +15,7 @@ from .errors import (
     EnrollmentDenied,
     EnrollmentError,
     EnrollmentExpired,
+    HomeDisabled,
     HomeNotLinked,
     NotAuthorized,
     OperatorProofError,
@@ -29,7 +30,7 @@ from .machine import (
     poll_until_decided,
     start_enrollment,
 )
-from .models import EventDeclaration, Features, Shared, SharedEntity
+from .models import EventDeclaration, Features, Shared, SharedEntity, Track
 from .sensitive import is_sensitive
 from .session import Handler, HomeSession, SessionStats
 
@@ -44,6 +45,7 @@ __all__ = [
     "EventDeclaration",
     "Features",
     "Handler",
+    "HomeDisabled",
     "HomeNotLinked",
     "HomeSession",
     "MachineClient",
@@ -55,6 +57,7 @@ __all__ = [
     "Shared",
     "SharedEntity",
     "Started",
+    "Track",
     "confirm_operator",
     "confirmation_code",
     "is_sensitive",

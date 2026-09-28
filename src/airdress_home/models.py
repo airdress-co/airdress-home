@@ -30,6 +30,31 @@ RATE_LIMITED: Final = "rate_limited"
 EXPIRED: Final = "expired"
 """The frame's ``notAfter`` had passed when it arrived; it was not run."""
 
+# Outcomes of a ``notify``, as the operator's ``notify_result`` carries them.
+DELIVERED: Final = "delivered"
+"""Stored in the owner's Home conversation."""
+DISABLED: Final = "disabled"
+"""Messages from the hub are switched off on the operator's ``Home``."""
+TOO_LONG: Final = "too_long"
+"""Over the operator's length limit, the title included."""
+NOTIFY_OUTCOMES: Final = frozenset({DELIVERED, RATE_LIMITED, DISABLED, TOO_LONG, REJECTED, FAILED})
+
+MAX_NOTIFY_CHARS: Final = 1000
+"""The operator's limit on a message, the title and one newline included."""
+
+# WebSocket close codes the operator ends a channel with. A long-poll's
+# stream simply ends.
+CLOSE_LIFETIME: Final = 4001
+"""The lifetime or idle limit, or a re-dial; reconnect."""
+CLOSE_REVOKED: Final = 4003
+"""The machine, its key or its approval was revoked; do not reconnect."""
+CLOSE_UNLINKED: Final = 4004
+"""No ``Home`` names the machine any more, or it is switched off."""
+CLOSE_DISPLACED: Final = 4008
+"""Another channel of the same machine replaced this one."""
+CLOSE_PROTOCOL: Final = 4009
+"""The operator refused a frame."""
+
 MAX_EVENTS: Final = 32
 """How many event declarations a ``features`` frame may carry."""
 MAX_EVENT_TYPES: Final = 32
@@ -88,3 +113,22 @@ class Features:
     trackers: tuple[str, ...] = field(default_factory=tuple)
     dropped: int = 0
     """Declarations that were malformed and left out."""
+    home: str | None = None
+    """The ``Home``'s name on the operator, if one names this machine."""
+    observe: tuple[str, ...] = ()
+    """The entities the operator wants streamed."""
+    observe_attributes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Per streamed entity, the only attributes the operator keeps."""
+
+
+@dataclass(frozen=True)
+class Track:
+    """A position of the owner's tracker, sent by a function carrying the
+    owner's location. Not answered."""
+
+    track_id: str
+    tracker: str
+    lat: float
+    lon: float
+    accuracy_m: float | None
+    function: str
