@@ -1,0 +1,66 @@
+# Keeps a release PR open for the next version, from the conventional commits
+# on main (release-please). Merging that PR tags `vX.Y.Z-bN` and creates a
+# draft GitHub release; the tag starts release.yml, which publishes to PyPI
+# and then publishes the draft.
+#
+# Everything here runs as the airdress-bot GitHub App, not GITHUB_TOKEN:
+# a PR, a push or a tag made with GITHUB_TOKEN starts no workflow, so the
+# release PR would get no CI and the tag would never publish.
+name: Release PR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: bot
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # The release PR changes the version in pyproject.toml, and uv.lock
+      # records it too: without this commit `uv sync --locked` fails on the PR.
+      - name: Check out the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ steps.bot.outputs.token }}
+      - if: steps.release.outputs.prs_created == 'true'
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Lock the new version
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          SLUG: ${{ steps.bot.outputs.app-slug }}
+        run: |
+          uv lock
+          if git diff --quiet; then
+            echo "uv.lock already names $(uv version --short)"
+            exit 0
+          fi
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+          git commit -am "chore: lock $(uv version --short)"
+          git push

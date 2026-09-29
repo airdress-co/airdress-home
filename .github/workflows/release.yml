@@ -1,5 +1,7 @@
 # Publishes airdress-home and airdress to PyPI by trusted publishing when a
-# release tag `vX.Y.Z` is pushed. No token exists anywhere: PyPI trusts this
+# release tag `vX.Y.Z` is pushed. release-please makes that tag when its
+# release PR is merged (release-please.yml), together with a draft GitHub
+# release that the last job here publishes once PyPI has the version. No token exists anywhere: PyPI trusts this
 # workflow file in this repository, in the `pypi` environment, for each of the
 # two projects. Those two trusted publishers are configured on PyPI by an
 # owner; until they are, a tag push fails at the publish step and publishes
@@ -62,11 +64,15 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      # Compared as PEP 440 versions: release-please tags `v0.1.0-b4`, and uv
+      # reports the same version normalized, `0.1.0b4`.
       - name: The tag names the airdress-home version
         run: |
           tag="${GITHUB_REF_NAME#v}"
           version=$(uv version --short)
-          if [ "$tag" != "$version" ]; then
+          if ! uv run --quiet --no-project --with packaging python -c \
+            'import sys; from packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2]))' \
+            "$tag" "$version"; then
             echo "tag v$tag does not match airdress-home $version" >&2
             exit 1
           fi
@@ -114,3 +120,23 @@ jobs:
           # airdress keeps its own version (0.0.0 until its API changes); a
           # release that did not bump it is not an error.
           skip-existing: true
+
+  # release-please created the GitHub release as a draft, so that it is only
+  # shown once PyPI has the version. A tag pushed by hand has no release, and
+  # this does nothing for it.
+  github-release:
+    name: Publish the GitHub release
+    needs: [publish-airdress-home, publish-airdress]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          draft=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft || true)
+          if [ "$draft" = true ]; then
+            gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false
+          else
+            echo "no draft release for $GITHUB_REF_NAME"
+          fi

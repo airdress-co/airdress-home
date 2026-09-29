@@ -82,14 +82,43 @@ The PyPI project [`airdress`](https://pypi.org/project/airdress/) is built from
 uv sync
 uv run pytest
 uv run mypy
-prek install   # the same checks CI runs
+prek install   # the same checks CI runs, and the commit-msg hook
 ```
 
 `tests/vectors/vectors.json` is shared with the operator: every value in it is
 recomputed by both implementations.
 
-Releases are built and published by CI only, from a `vX.Y.Z` tag, by PyPI
-trusted publishing.
+### Commits and releases
+
+Commit messages and PR titles are
+[conventional commits](https://www.conventionalcommits.org/en/v1.0.0/)
+(`fix: …`, `feat: …`, `docs: …`, `feat!: …` for a breaking change). The
+commit-msg hook checks each commit, and CI checks a PR's title and commits.
+
+Releases are made by [release-please](https://github.com/googleapis/release-please),
+never by hand:
+
+1. Every push to `main` updates one open release PR, `chore(main): release
+   <version>`, with the next version in `pyproject.toml` and
+   `.release-please-manifest.json`, `uv.lock` re-locked, and the new
+   `CHANGELOG.md` entry. A `fix:` or `feat:` commit makes one; `docs:`,
+   `chore:`, `ci:` and the like do not on their own.
+2. Merging that PR tags `vX.Y.Z-bN` and creates a draft GitHub release.
+3. The tag starts `release.yml`: it checks the tag against the version,
+   tests, builds and publishes both packages to PyPI by trusted publishing,
+   then publishes the draft release.
+
+Until 0.1.0 every version is a beta: `fix:`, `feat:` and even a breaking
+change all move `0.1.0-b3` to `0.1.0-b4`. release-please spells it with a
+hyphen; every Python tool reads it as the PEP 440 version `0.1.0b4`, which is
+what PyPI shows. To leave the betas, put `Release-As: 0.1.0` in the body of a
+commit on `main`, and remove `versioning`, `prerelease` and `prerelease-type`
+from `release-please-config.json`.
+
+The `airdress` meta-package is not part of this cycle. It keeps its own
+version (0.0.0), which changes only when its own API does: bump it by hand in
+`airdress/pyproject.toml` in an ordinary PR, and the next release tag
+publishes it with `airdress-home`. A release that leaves it alone skips it.
 
 ## Licence
 

@@ -13,6 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # release-please reads the history to choose the next version and write the
+  # changelog, so every commit a PR brings, and its title (the merge commit's
+  # body), must be a conventional commit. The same check as the commit-msg
+  # hook in .pre-commit-config.yaml, at the same version.
+  conventional-commits:
+    name: Conventional commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: scripts/conventional-commits.sh
   prek:
     name: Pre-commit (prek)
     runs-on: ubuntu-24.04
