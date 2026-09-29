@@ -14,9 +14,10 @@ concurrency:
 
 jobs:
   # release-please reads the history to choose the next version and write the
-  # changelog, so every commit a PR brings, and its title (the merge commit's
-  # body), must be a conventional commit. The same check as the commit-msg
-  # hook in .pre-commit-config.yaml, at the same version.
+  # changelog, so every commit a PR brings must be a conventional commit: PRs
+  # are merged by rebase, and those commits are what lands on main. The title
+  # is held to the same form. The same check as the commit-msg hook in
+  # .pre-commit-config.yaml, at the same version.
   conventional-commits:
     name: Conventional commits
     if: github.event_name == 'pull_request'
