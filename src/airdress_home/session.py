@@ -4,7 +4,11 @@
 operator frame against the **pinned** operator key, enforces the session, a
 strictly increasing ``seq`` and ``notAfter``, hands ``call`` and ``read``
 frames to a :class:`Handler`, and sends the answers back. When the channel
-ends it reconnects with jittered exponential backoff, 1 s to 60 s.
+ends it reconnects with jittered exponential backoff, 1 s to 60 s — unless
+the operator refuses the machine for good: a 4003 close, or a ``401`` on a
+dial whose code says revoked or lapsed. The session then stops and says
+which (``on_revoked`` / ``on_lapsed``), so its owner re-authenticates instead
+of dialling a refusal forever.
 
 A frame whose ``seq`` was already handled is dropped (a long-poll rotation
 can repeat one); a jump in ``seq`` is counted as a gap. Neither is ever
@@ -43,6 +47,9 @@ CLOCK_SKEW = 30
 
 #: How many measurement events :class:`SessionStats` keeps.
 MAX_EVENTS = 256
+
+#: The drop reason of a dial the operator answered ``401``, before its code.
+_NOT_AUTHORIZED = "not_authorized_"
 
 
 class Handler(Protocol):
@@ -132,6 +139,7 @@ class HomeSession:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         on_connection: Callable[[bool], None] | None = None,
         on_revoked: Callable[[], None] | None = None,
+        on_lapsed: Callable[[], None] | None = None,
     ) -> None:
         if len(operator_key) != 32:
             raise ValueError("the pinned operator key is 32 bytes")
@@ -144,10 +152,14 @@ class HomeSession:
         self._on_event = on_event
         self._on_connection = on_connection
         self._on_revoked = on_revoked
+        self._on_lapsed = on_lapsed
         self.home: str | None = None
         """The ``Home``'s name as the last ``hello`` gave it."""
         self.revoked = False
-        """The operator closed the channel as revoked; it is not reopened."""
+        """The operator revoked this machine; the channel is not reopened."""
+        self.refusal: str | None = None
+        """Why the operator refuses this machine for good, once it does:
+        ``"revoked"`` or ``"lapsed"``. The channel is not reopened either way."""
         self._notifies: dict[str, asyncio.Future[str]] = {}
         self._calls = _Window(max_calls_per_minute)
         self._emits = _Window(max_emits_per_minute)
@@ -216,10 +228,9 @@ class HomeSession:
                 self._since_drop_first_call = False
             lived = time.monotonic() - opened_at
             self._event("drop", transport=self.channel.name, reason=reason, lived_s=round(lived, 1))
-            if reason == f"closed_{models.CLOSE_REVOKED}":
-                self.revoked = True
-                if self._on_revoked is not None:
-                    self._on_revoked()
+            refusal = await self._refusal(reason)
+            if refusal is not None:
+                self._refused(refusal)
                 break
             if lived > 30:
                 delay = self.backoff_min
@@ -235,6 +246,42 @@ class HomeSession:
                 await asyncio.wait_for(self._stop.wait(), wait)
             delay = min(self.backoff_max, delay * 2)
 
+    async def _refusal(self, reason: str) -> str | None:
+        """Whether ``reason`` ends the session for good, and why.
+
+        A ``401`` on a dial is terminal when its code says revoked or lapsed:
+        dialling again would be refused the same way, forever. A 4003 close
+        says the same, but not which: it is asked once, at once, by dialling
+        again, and a dial that is let in (the owner approved it again in the
+        meantime) carries on. A 4003 whose dial fails another way stands as a
+        revocation.
+        """
+        if reason.startswith(_NOT_AUTHORIZED):
+            return models.refusal_kind(reason.removeprefix(_NOT_AUTHORIZED))
+        if reason != f"closed_{models.CLOSE_REVOKED}":
+            return None
+        try:
+            await self.channel.open()
+        except NotAuthorized as e:
+            return e.kind or models.REVOKED
+        except Exception:  # noqa: BLE001 - the operator's 4003 stands
+            return models.REVOKED
+        self._opened = True
+        return None
+
+    def _refused(self, kind: str) -> None:
+        self.refusal = kind
+        self.revoked = kind == models.REVOKED
+        self._event("refused", transport=self.channel.name, refusal=kind)
+        callback = self._on_lapsed if kind == models.LAPSED else self._on_revoked
+        if callback is None:
+            # An owner that only listens for a revocation hears a lapse there
+            # too: both end the session, and both are answered by
+            # re-authenticating.
+            callback = self._on_revoked
+        if callback is not None:
+            callback()
+
     async def _run_once(self) -> str:
         try:
             if self._opened:
@@ -244,7 +291,7 @@ class HomeSession:
         except HomeNotLinked:
             return "home_not_linked"
         except NotAuthorized as e:
-            return f"not_authorized_{e.code}"
+            return f"{_NOT_AUTHORIZED}{e.code}"
         except ChannelClosed as e:
             return e.reason
         except Exception as e:  # noqa: BLE001 - any failure to connect is retried

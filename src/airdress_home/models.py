@@ -42,8 +42,8 @@ NOTIFY_OUTCOMES: Final = frozenset({DELIVERED, RATE_LIMITED, DISABLED, TOO_LONG,
 MAX_NOTIFY_CHARS: Final = 1000
 """The operator's limit on a message, the title and one newline included."""
 
-# WebSocket close codes the operator ends a channel with. A long-poll's
-# stream simply ends.
+# Close codes the operator ends a channel with: a WebSocket's close frame,
+# and a long-poll's last line (``{"type": "closed", "code", "reason"}``).
 CLOSE_LIFETIME: Final = 4001
 """The lifetime or idle limit, or a re-dial; reconnect."""
 CLOSE_REVOKED: Final = 4003
@@ -54,6 +54,33 @@ CLOSE_DISPLACED: Final = 4008
 """Another channel of the same machine replaced this one."""
 CLOSE_PROTOCOL: Final = 4009
 """The operator refused a frame."""
+
+# Why the operator refuses this machine for good. Told by the ``401``
+# refusal's code; a session that meets one stops, and hands the kind to its
+# owner, which re-authenticates.
+REVOKED: Final = "revoked"
+"""The machine or its key was revoked: only a new enrollment helps."""
+LAPSED: Final = "lapsed"
+"""The owner's approval of the machine expired: the same machine renews it."""
+
+REVOKED_REFUSALS: Final = frozenset({"invalid_signature", "machine_revoked"})
+"""``401`` codes that mean the operator no longer knows this machine's key.
+The operator answers a revoked machine as it answers a wrong signature, so
+that nothing is an oracle; for a key that signed correctly until now, it is
+the revocation."""
+LAPSED_REFUSALS: Final = frozenset({"machine_authorization_expired"})
+"""``401`` codes that mean the approval lapsed."""
+
+
+def refusal_kind(code: str) -> str | None:
+    """:data:`REVOKED` or :data:`LAPSED` for a terminal ``401`` code, or
+    ``None`` for one a retry can outlast (a clock out of step, say)."""
+    if code in REVOKED_REFUSALS:
+        return REVOKED
+    if code in LAPSED_REFUSALS:
+        return LAPSED
+    return None
+
 
 MAX_EVENTS: Final = 32
 """How many event declarations a ``features`` frame may carry."""

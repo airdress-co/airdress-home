@@ -7,6 +7,9 @@ the old stream and writes everything after that ``seq`` again on the new one.
 The session above drops a ``seq`` it has already handled, so a rotation can
 repeat a frame on the wire but never loses one.
 
+A session the operator ends ends its poll with one ``closed`` line carrying
+the close code a WebSocket would (4003 revoked, 4004 unlinked…).
+
 Upstream, frames are batched into ``POST /v1/home/frames?session=<id>``,
 flushed after ``flush_ms`` or ``batch`` frames, each batch led by an ``ack``.
 
@@ -33,6 +36,9 @@ if TYPE_CHECKING:
 
 POLL = "/v1/home/poll"
 FRAMES = "/v1/home/frames"
+#: The operator's last line on a session it ended: ``{"type": "closed",
+#: "code": 4003, "reason": "revoked"}``.
+CLOSED = "closed"
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,14 @@ class PollChannel:
                 line = parse_line(raw)
                 if line is None:
                     continue
+                if line.get("type") == CLOSED:
+                    # The operator ended the session, and says why, as a
+                    # WebSocket's close frame would: the channel's end.
+                    code = line.get("code")
+                    code = code if isinstance(code, int) and not isinstance(code, bool) else None
+                    reason = f"closed_{code}" if code else "closed"
+                    await self._queue.put(ChannelClosed(reason, code))
+                    return
                 if generation in self._retiring:
                     self.stats.overlap_lines += 1
                 await self._queue.put(line)

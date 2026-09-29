@@ -23,6 +23,35 @@ if TYPE_CHECKING:
 PATH = "/v1/home/session"
 
 
+#: A session id no session has: the probe's upstream post names it.
+_NO_SESSION = "00000000-0000-0000-0000-000000000000"
+
+
+async def refusal_code(client: MachineClient) -> str:
+    """Why the operator refused this machine, read from a signed request.
+
+    A refused WebSocket upgrade carries no body a client can read, so a
+    ``401`` there cannot tell a revoked machine from a lapsed approval or a
+    clock out of step. One signed, empty upstream post to a session that
+    does not exist asks again: it changes nothing on the operator, and a
+    ``401`` answer carries the code. ``"unauthorized"`` when the probe was
+    not refused (the refusal did not last) or could not be sent.
+    """
+    try:
+        resp = await client.request(
+            "POST",
+            f"/v1/home/frames?session={_NO_SESSION}",
+            b"",
+            content_type="application/x-ndjson",
+        )
+    except NotAuthorized as e:
+        return e.code
+    except (aiohttp.ClientError, TimeoutError):
+        return "unauthorized"
+    resp.release()
+    return "unauthorized"
+
+
 class WsChannel:
     """A home channel over one WebSocket."""
 
@@ -51,7 +80,7 @@ class WsChannel:
             if e.status == 403:
                 raise HomeNotLinked(str(e.message)) from e
             if e.status == 401:
-                raise NotAuthorized(str(e.message)) from e
+                raise NotAuthorized(await refusal_code(self._client)) from e
             if 500 <= e.status < 600 and e.status != 501:
                 # The operator or the relay in trouble: no other transport
                 # would fare better, so this is not a refused upgrade.

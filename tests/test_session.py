@@ -11,7 +11,7 @@ import pytest
 
 from airdress_home.channel import ChannelStats
 from airdress_home.codes import MachineKey, b64url
-from airdress_home.errors import ChannelClosed, ProtocolError
+from airdress_home.errors import ChannelClosed, NotAuthorized, ProtocolError
 from airdress_home.frames import signed_bytes
 from airdress_home.models import Features, Shared, SharedEntity, Track
 from airdress_home.session import HomeSession
@@ -468,18 +468,140 @@ async def test_state_and_entity_events_stream_only_while_connected() -> None:
     await asyncio.wait_for(task, 2)
 
 
-async def test_a_revoked_channel_is_not_reopened() -> None:
-    ch = Held()
-    ch.close_code = 4003
-    revoked: list[bool] = []
+class Refusing(Held):
+    """Held, and every dial after the first is answered ``401 <code>``;
+    ``None`` lets it in."""
+
+    def __init__(self, code: str | None) -> None:
+        super().__init__()
+        self.refuse = code
+
+    async def open(self) -> None:
+        self.opened += 1
+        if self.opened > 1 and self.refuse is not None:
+            raise NotAuthorized(self.refuse)
+
+
+def _session(ch: Held, **callbacks: Any) -> tuple[HomeSession, list[str]]:
+    heard: list[str] = []
     s = HomeSession(
-        ch, Handler(), OP.public, backoff_min=0.01, on_revoked=lambda: revoked.append(True)
+        ch,
+        Handler(),
+        OP.public,
+        backoff_min=0.01,
+        on_revoked=lambda: heard.append("revoked"),
+        **callbacks,
     )
+    return s, heard
+
+
+async def test_a_revoked_channel_is_not_reopened() -> None:
+    ch = Refusing("invalid_signature")
+    ch.close_code = 4003
+    s, heard = _session(ch, on_lapsed=lambda: None)
     task = await _up(s)
     ch.gate.set()
     await asyncio.wait_for(task, 2)
-    assert s.revoked and revoked == [True]
-    assert ch.opened == 1
+    assert s.revoked and s.refusal == "revoked" and heard == ["revoked"]
+    assert ch.opened == 2, "one dial asks which, and none after it"
+    assert next(e for e in s.stats.events if e["kind"] == "refused")["refusal"] == "revoked"
+
+
+async def test_a_4003_whose_dial_says_lapsed_is_handed_on_as_lapsed() -> None:
+    ch = Refusing("machine_authorization_expired")
+    ch.close_code = 4003
+    lapsed: list[bool] = []
+    s, heard = _session(ch, on_lapsed=lambda: lapsed.append(True))
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.wait_for(task, 2)
+    assert s.refusal == "lapsed" and not s.revoked
+    assert lapsed == [True] and heard == []
+
+
+async def test_a_lapse_reaches_on_revoked_when_nothing_listens_for_it() -> None:
+    ch = Refusing("machine_authorization_expired")
+    ch.close_code = 4003
+    s, heard = _session(ch)
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.wait_for(task, 2)
+    assert s.refusal == "lapsed" and heard == ["revoked"]
+
+
+async def test_a_4003_whose_dial_fails_otherwise_stands_as_revoked() -> None:
+    class Unreachable(Held):
+        async def open(self) -> None:
+            self.opened += 1
+            if self.opened > 1:
+                raise ChannelClosed("handshake_502")
+
+    ch = Unreachable()
+    ch.close_code = 4003
+    s, heard = _session(ch)
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.wait_for(task, 2)
+    assert s.refusal == "revoked" and heard == ["revoked"]
+
+
+async def test_a_4003_whose_dial_is_let_in_carries_on() -> None:
+    ch = Refusing(None)
+    ch.close_code = 4003
+    s, heard = _session(ch)
+    task = await _up(s)
+    ch.gate.set()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if s.stats.connects >= 2:
+            break
+    assert s.stats.connects >= 2, "the dial that asked is the channel it goes on with"
+    assert heard == [] and s.refusal is None
+    await s.stop()
+    await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.parametrize(
+    ("code", "kind"),
+    [
+        ("invalid_signature", "revoked"),
+        ("machine_revoked", "revoked"),
+        ("machine_authorization_expired", "lapsed"),
+    ],
+)
+async def test_a_401_on_redial_is_terminal(code: str, kind: str) -> None:
+    # The phone's Disconnect: the channel ended "unlinked" (4004), and every
+    # dial after it was refused 401. That used to be one more drop, retried
+    # forever.
+    ch = Refusing(code)
+    ch.close_code = 4004
+    lapsed: list[bool] = []
+    s = HomeSession(ch, Handler(), OP.public, backoff_min=0.01, backoff_max=0.02)
+    s._on_lapsed = lambda: lapsed.append(True)
+    revoked: list[bool] = []
+    s._on_revoked = lambda: revoked.append(True)
+    task = await _up(s)
+    ch.gate.set()
+    await asyncio.wait_for(task, 2)
+    assert s.refusal == kind
+    assert (revoked, lapsed) == (([True], []) if kind == "revoked" else ([], [True]))
+    await asyncio.sleep(0.1)
+    assert ch.opened == 2, "no dial after the refusal"
+
+
+async def test_a_401_a_retry_can_outlast_is_retried() -> None:
+    ch = Refusing("signature_clock_skew")
+    ch.close_code = 4004
+    s = HomeSession(ch, Handler(), OP.public, backoff_min=0.01, backoff_max=0.02)
+    task = await _up(s)
+    ch.gate.set()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if ch.opened >= 4:
+            break
+    assert ch.opened >= 4 and s.refusal is None
+    await s.stop()
+    await asyncio.wait_for(task, 2)
 
 
 async def test_unlinked_backs_off_to_the_maximum() -> None:
