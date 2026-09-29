@@ -1,6 +1,6 @@
 [project]
 name = "airdress-home"
-version = "0.1.0b2"
+version = "0.1.0b3"
 description = "Link a home hub such as Home Assistant to an airdress: machine enrollment, request signing and the held channel"
 readme = "README.md"
 license = "Apache-2.0"
@@ -30,7 +30,7 @@ Source = "https://github.com/airdress-co/airdress-home"
 Issues = "https://github.com/airdress-co/airdress-home/issues"
 
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27,<1.32"]  # 1.32 writes Metadata-Version 2.5, which the publish action refuses
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
