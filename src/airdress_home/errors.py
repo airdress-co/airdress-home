@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .models import refusal_kind
+
 
 class AirdressHomeError(Exception):
     """Base class for every error this library raises."""
@@ -29,11 +31,21 @@ class OperatorProofError(AirdressHomeError):
 
 
 class NotAuthorized(AirdressHomeError):
-    """The operator refused this machine's signature or its approval has lapsed."""
+    """The operator refused this machine's signature or its approval has lapsed.
+
+    ``code`` is the refusal's code; ``kind`` says what it means for good —
+    ``"revoked"``, ``"lapsed"``, or ``None`` for a refusal a retry can outlast
+    (see :func:`airdress_home.models.refusal_kind`).
+    """
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+    @property
+    def kind(self) -> str | None:
+        """``"revoked"``, ``"lapsed"``, or ``None``."""
+        return refusal_kind(self.code)
 
 
 class HomeNotLinked(AirdressHomeError):
