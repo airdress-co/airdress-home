@@ -1,6 +1,6 @@
 [project]
 name = "airdress-home"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Link a home hub such as Home Assistant to an airdress: machine enrollment, request signing and the held channel"
 readme = "README.md"
 license = "Apache-2.0"
