@@ -5,6 +5,13 @@ the form `0.1.0-b4`, which every Python tool reads as `0.1.0b4`, the version
 PyPI shows. Entries from 0.1.0-b4 on are generated from conventional commits;
 the ones below were written by hand from the history before that.
 
+## [0.1.0-b4](https://github.com/airdress-co/airdress-home/compare/v0.1.0-b3...v0.1.0-b4) (2026-09-29)
+
+
+### Bug Fixes
+
+* __version__ is the installed version ([7891578](https://github.com/airdress-co/airdress-home/commit/78915786d4232b316b378d47a12f37b526972599))
+
 ## 0.1.0b3 (2026-09-29)
 
 The first version published to PyPI. 0.1.0b1 was never tagged and 0.1.0b2
