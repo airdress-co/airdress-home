@@ -1,6 +1,19 @@
 # Run with `prek run --all-files` (or pre-commit). CI runs the same.
 # Hook revisions are pinned by commit SHA; the tag each one is sits beside it.
+# `prek install` installs the commit-msg hook as well as the pre-commit one.
+default_install_hook_types: [pre-commit, commit-msg]
 repos:
+  # Commit messages are conventional commits: release-please reads them to
+  # choose the next version and write CHANGELOG.md. CI runs the same checker
+  # over a PR's title and commits (scripts/conventional-commits.sh, which
+  # names this version and these types too). Locally a merge or a fixup!
+  # commit passes; CI's check is strict and refuses a fixup! left in a PR.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 91ab4bf57e58b32adf1a122681f6ebe164d081c8 # frozen: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        args: [build, chore, ci, deps, docs, feat, fix, perf, refactor, revert, style, test]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
     hooks:
