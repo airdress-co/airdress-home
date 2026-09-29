@@ -94,6 +94,8 @@ Commit messages and PR titles are
 [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/)
 (`fix: …`, `feat: …`, `docs: …`, `feat!: …` for a breaking change). The
 commit-msg hook checks each commit, and CI checks a PR's title and commits.
+PRs are merged by rebase (merge commits are off): the PR's own commits are
+the history release-please reads, so each one should say what it changes.
 
 Releases are made by [release-please](https://github.com/googleapis/release-please),
 never by hand:
