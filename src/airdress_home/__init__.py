@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version as _distribution_version
+
 from .codes import MachineKey, confirmation_code
 from .errors import (
     AirdressHomeError,
@@ -69,4 +71,6 @@ __all__ = [
     "start_reauth",
 ]
 
-__version__ = "0.1.0b1"
+# The installed distribution's version, so that it cannot drift from
+# pyproject.toml the way a literal here did (0.1.0b3 reported 0.1.0b1).
+__version__ = _distribution_version("airdress-home")
