@@ -28,6 +28,7 @@ jobs:
   check-publisher:
     name: Check the trusted publisher
     if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -60,6 +61,7 @@ jobs:
   build:
     name: Build
     if: github.event_name == 'push'
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -88,6 +90,7 @@ jobs:
   publish-airdress-home:
     name: Publish airdress-home
     needs: build
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -105,6 +108,7 @@ jobs:
   publish-airdress:
     name: Publish airdress
     needs: publish-airdress-home
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -127,6 +131,7 @@ jobs:
   github-release:
     name: Publish the GitHub release
     needs: [publish-airdress-home, publish-airdress]
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     permissions:
       contents: write
